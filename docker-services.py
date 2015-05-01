@@ -456,13 +456,13 @@ def get_volume_mount(path):
     skip_pos = output.find(" ")
     if skip_pos <= 0 or skip_pos >= len(output):
         raise RuntimeError("failed to parse df output")
-    output = output[skip_pos:1].strip()
+    output = output[skip_pos+1:].strip()
 
     # skip past all entries not starting with /
     while True:
         fwslash = output.find("/")
         spacepos = output.find(" ")
-        if fwslash <= 0:
+        if fwslash < 0:
             raise RuntimeError("failed to parse df output")
         if spacepos >= 0 and spacepos < fwslash:
             output = output[spacepos+1:].strip()
