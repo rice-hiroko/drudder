@@ -565,18 +565,19 @@ def btrfs_tool_check():
     # make sure the btrfs tool is working:
     btrfs_path = locate_binary("btrfs")
     if btrfs_path == None:
-        print_msg("btrfs tool not found. Are btrfs-progs installed?",
-            service=service, color="red")
+        print_msg("error: btrfs tool not found. Are btrfs-progs installed?",
+            color="red")
         sys.exit(1)
     output = None
     try:
         output = subprocess.check_output([btrfs_path, "--version"],
-            stderr=subprocess.STDOUT)
+            stderr=subprocess.STDOUT).decode("utf-8", "ignore")
     except subprocess.CalledProcessError as e:
-        output = e.output
-    if not output.startswith("btrfs-progrs "):
-        print_msg("btrfs tool returned unexpected string. Are " +\
-            "btrfs-progrs installed and working?", service=service,
+        output = e.output.decode("utf-8", "ignore")
+    if not output.lower().startswith("btrfs-progrs ") and \
+            not output.lower().startswith("btrfs "):
+        print_msg("error: btrfs tool returned unexpected string. Are " +\
+            "btrfs-progrs installed and working?",
             color="red")
         sys.exit(1)
 
@@ -590,7 +591,7 @@ def snapshot_btrfs_subvolume_check(service_path, service_name):
 
     btrfs_tool_check()
 
-    if os.path.join(servicepath, "livedata"):
+    if os.path.join(service_path, "livedata"):
         if not btrfs_is_subvolume(os.path.join(service_path, "livedata"))\
                 and len(get_service_volumes(service_path, service_name,\
                 rw_only=True)) > 0:
