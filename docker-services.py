@@ -305,10 +305,19 @@ def print_msg(text, service=None, color="blue"):
     docker_services_part = "docker-services.py"
     if service == None or len(service) == 0:
         docker_services_part = color_code() + "docker-services.py"
- 
+
+    initial_length = len("[docker-services.py")
+    if service != None:
+        initial_length += len("/" + service)
+    initial_length += len("] ") 
+
     print("\033[0m\033[1m[\033[0m" + docker_services_part + \
         service_part + "\033[0m\033[1m] \033[0m" + \
-        text + "\033[0m")
+        textwrap.fill(text, 79,
+            initial_indent=(" " * initial_length),
+            subsequent_indent=(" " * initial_length))[
+            initial_length:] + \
+        "\033[0m")
 
 class LaunchThreaded(threading.Thread):
     """ A helper to launch a service and wait for the launch only for a
@@ -381,6 +390,7 @@ def get_running_service_containers(service_path, service_name):
             print_msg("error: it appears docker-compose is installed with " +\
                 "a version incompatible to docker.", color="red")
             sys.exit(1)
+        raise e
     output = output.\
         replace("\r", "\n").replace("\n\n", "").split("\n")
 
