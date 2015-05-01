@@ -152,6 +152,7 @@ freely, subject to the following restrictions:
 
 import argparse
 from argparse import RawTextHelpFormatter, HelpFormatter
+import datetime
 import json
 import os
 import subprocess
@@ -509,6 +510,11 @@ def get_volume_mount(path):
 
     return output
 
+def subvolume_stat_check(path):
+    output = subprocess.check_output([locate_binary("stat"),
+        "-c", "%i", path]).decode('utf-8', 'ignore').strip()
+    return (output == "256")
+
 def btrfs_is_subvolume(path):
     """ Check if the given path is a btrfs subvolume.
     """
@@ -560,23 +566,6 @@ def btrfs_is_subvolume(path):
         print("ghi")
         print_msg(nontrivial_error, color="red")
         sys.exit(1)
-    return False
-
-def btrfs_list_snapshots(path):
-    """ Get a list of all the file paths representing snapshot volumes of the
-        btrfs subvolume at the given path.
-    """
-    raise RuntimeError("not implemented yet")
-
-def btrfs_has_given_snapshot(subvolume_path, snapshot_path):
-    """ Check if the given subvolume has a btrfs snapshot at the given
-        snapshot path.
-    """
-    snapshots = btrfs_list_snapshots(subvolume_path)
-    for snapshot in snapshots:
-        if os.path.normpath(os.path.abspath(snapshot)) == \
-                os.path.normpath(os.path.abspath(snapshot_path)):
-            return True
     return False
 
 def check_running_snapshot_transaction(service_path, service_name):
@@ -806,10 +795,11 @@ def snapshot(directory, service):
             ", should be btrfs!")
         return fs
 
+    livedata_renamed_dir = os.path.join(directory, ".livedata-predeletion-renamed")
     livedata_dir = os.path.join(directory, "livedata")
     snapshot_dir = os.path.join(directory, ".btrfs-livedata-snapshot")
     tempvolume_dir = os.path.join(directory, ".btrfs-livedata-temporary-volume")
-    tempdata_dir = os.path.join(directory, ".livedata-temporary-copy")
+    tempdata_dir = os.path.join(directory, ".livedata-temporary-prevolume-copy")
 
     # make sure the livedata/ dir is a btrfs subvolume:    
     if is_service_running(directory, service):
@@ -840,10 +830,29 @@ def snapshot(directory, service):
             "Did you call the script twice?", service=service, color="red")
         return False
 
-    # make sure the .livedata-temporary-copy directory is unused:
+    # make sure the .livedata-predeletion-renamed isn't there:
+    if os.path.exists(livedata_renamed_dir):
+        if not os.path.exists(livedata_dir):
+            print_msg("warning: .livedata-predeletion-renamed/ " + \
+                "is present and no livedata/ folder." +\
+                "Moving it back...",
+                service=service, color="yellow")
+            shutil.move(livedata_renamed_dir, livedata_dir)
+            assert(not os.path.exists(livedata_renamed_dir))
+        else:
+            print_msg("error: .livedata-predeletion-renamed/ " + \
+                "is still there, indicating a previously aborted " +\
+                "run, but livedata/ is also still around. " +\
+                "Please figure out which one you want to keep, and " +\
+                "delete one of the two.", service=service,
+                color="red")
+            sys.exit(1)
+
+    # make sure the .livedata-temporary-prevolume-copy directory is unused:
     if os.path.exists(tempdata_dir):
-        print_msg("warning: .btrfs-livedata-snapshot/ already present! " \
-            + "This is probably a leftover from a previously " + \
+        print_msg("warning: .livedata-temporary-prevolume-copy/ " + \
+            "already present! " +\
+            "This is probably a leftover from a previously " + \
             "aborted attempt. Will now attempt to delete it...",
             service=service, color="yellow")
         shutil.rmtree(tempdata_dir)
@@ -851,16 +860,18 @@ def snapshot(directory, service):
 
     # make sure the btrfs snapshot path is unused:
     if os.path.exists(snapshot_dir):
-        if btrfs_has_given_snapshot(livedata_dir, snapshot_dir):
+        if subvolume_stat_check(snapshot_dir):
             print_msg("warning: .btrfs-livedata-snapshot/ already present! " \
                 + "This is probably a leftover from a previously " + \
                 "aborted attempt. Will now attempt to delete it...",
                 service=service, color="yellow")
-            raise RuntimeError("not implemented yet")
+            subprocess.check_output([btrfs_path, "subvolume",
+                "delete", snapshot_dir])
+            assert(not os.path.exists(snapshot_dir))
         else:
             print_msg("error: .btrfs-livedata-snapshot/ already present, " \
                 + "but it is not a btrfs snapshot!! I don't know how " + \
-                "to deal with this, aborting snapshot.", service=service,
+                "to deal with this, aborting.", service=service,
                 color="red")
             return False
 
@@ -914,15 +925,69 @@ def snapshot(directory, service):
             return False
 
         # remove old livedata/ dir:
-        shutil.rmtree(livedata_dir)
-        shutil.move(tempvolume_dir, livedata_dir)
+        propagate_interrupt = None
+        while True:
+            try:
+                shutil.move(livedata_dir, livedata_renamed_dir)
+                shutil.move(tempvolume_dir, livedata_dir)
+                shutil.rmtree(livedata_renamed_dir)
+                break
+            except KeyboardInterrupt as e:
+                propagate_interrupt = e
+                continue
+        if propagate_interrupt != None:
+            raise propagate_interrupt
         print_msg("conversion of livedata/ to btrfs subvolume complete.",
             service=service)
 
-    # go ahead and snapshot:
-    
+    snapshots_dir = os.path.join(directory, "livedata-snapshots")
 
+    # create livedata-snapshots/ if not present:
+    if not os.path.exists(snapshots_dir):
+        os.mkdir(snapshots_dir)
+
+    # go ahead and snapshot:
+    print_msg("initiating btrfs snapshot...",
+        service=service)
+    output = subprocess.check_output([btrfs_path, "subvolume", "snapshot",
+        "-r", "--", livedata_dir, snapshot_dir])
     
+    # copy snapshot to directory:
+    now = datetime.datetime.now()
+    snapshot_base_name = str(now.year)
+    if now.month < 10:
+        snapshot_base_name += "0"
+    snapshot_base_name += str(now.month)
+    if now.day < 10:
+        snapshot_base_name += "0"
+    snapshot_base_name += str(now.day)
+    snapshot_base_name += "-"
+    if now.hour < 10:
+        snapshot_base_name += "0"
+    snapshot_base_name += str(now.hour)
+    if now.minute < 10:
+        snapshot_base_name += "0"
+    snapshot_base_name += str(now.minute)
+    if now.second < 10:
+        snapshot_base_name += "0"
+    snapshot_base_name += str(now.second)
+    snapshot_name = snapshot_base_name + "00"
+    i = 1
+    while os.path.exists(os.path.join(snapshots_dir, snapshot_name)):
+        snapshot_name = snapshot_base_name
+        if i < 10:
+            snapshot_name += "0"
+        snapshot_name += str(i)
+        i += 1
+    snapshot_specific_dir = os.path.join(snapshots_dir,
+        snapshot_name)
+    print_msg("copying to " + snapshot_specific_dir,
+        service=service)
+    shutil.copytree(snapshot_dir, snapshot_specific_dir)
+    subprocess.check_output([btrfs_path, "subvolume",
+        "delete", snapshot_dir])
+    assert(not os.path.exists(snapshot_dir))
+    print_msg("snapshot complete.", service=service, color="green")
     
 def unknown_action(hint=None):
     """ Print an error that the given action to docker-services.py is invalid,
