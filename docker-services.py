@@ -483,7 +483,8 @@ def btrfs_is_subvolume(path):
     mount = get_volume_mount(path)
 
     # get btrfs subvolume list:
-    output = subprocess.check_output([locate_binary("btrfs"), path]).\
+    output = subprocess.check_output([locate_binary("btrfs"),
+        "subvolume", "list", path]).\
         decode("utf-8", "ignore").strip().split("\n")
     for line in output:
         if not line.startswith("ID ") or line.find(" path ") < 0:
