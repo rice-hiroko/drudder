@@ -156,6 +156,7 @@ import json
 import os
 import subprocess
 import re
+import shutil
 import sys
 import textwrap
 import threading
@@ -263,6 +264,10 @@ def filesystem_of_path(path):
     if end_pos <= 0:
         raise RuntimeError("failed to parse df output")
     device_of_path = output[:end_pos]
+    if device_of_path == "-":
+        # we can't find out the filesystem of this path.
+        # -> try to find out the parent!
+        return filesystem_of_path(os.path.normpath(path + "/../"))
 
     output = subprocess.check_output([locate_binary("mount")]).\
         decode("utf-8", "ignore")
@@ -303,7 +308,7 @@ def print_msg(text, service=None, color="blue"):
         service_part = "\033[0m/" + color_code() + service
 
     docker_services_part = "docker-services.py"
-    if service == None or len(service) == 0:
+    if service == None or len(service) == 0 or True:
         docker_services_part = color_code() + "docker-services.py"
 
     initial_length = len("[docker-services.py")
@@ -507,8 +512,12 @@ def get_volume_mount(path):
 def btrfs_is_subvolume(path):
     """ Check if the given path is a btrfs subvolume.
     """
+    nontrivial_error = "error: failed to map a btrs subvolume "+\
+        "to its POSIX path. This seems to be a non-trivial setup."+\
+        " You should probably do your snapshotting manually!!"
+
     # first, get the containing mount point:
-    mount = get_volume_mount(path)
+    mount = get_volume_mount(os.path.normpath(path + "/../"))
 
     # get btrfs subvolume list:
     output = subprocess.check_output([locate_binary("btrfs"),
@@ -519,8 +528,38 @@ def btrfs_is_subvolume(path):
             raise RuntimeError("unexpected btrfs tool output - " + \
                 "maybe incompatible tool version? Please report this.")
         line = line[line.find(" path ")+len(" path "):].strip()
-        if line == path:
+        full_path_guess = mount + line
+        if not os.path.exists(full_path_guess):
+            if line == "DELETED":
+                continue
+            print_msg(nontrivial_error, color="red")
+            sys.exit(1)
+        if os.path.normpath(os.path.abspath(full_path_guess)) == \
+                os.path.normpath(os.path.abspath(path)):
+            try:
+                output = subprocess.check_output([locate_binary("stat"),
+                    "-c", "%i", path]).decode('utf-8', 'ignore').strip()
+            except subprocess.CalledProcessError as e:
+                # stat failed, although btrfs subvolume list lists it!
+                print("abc")
+                print_msg(nontrivial_error, color="red")
+                sys.exit(1)
+            if output != "256":
+                # not a subvolume, although btrfs subvolume list lists it!
+                print('def: ' + output)
+                print_msg(nontrivial_error, color="red")
+                sys.exit(1)
             return True
+    try:
+        output = subprocess.check_output([locate_binary("stat"),
+            "-c", "%i", path]).decode('utf-8', 'ignore').strip()
+    except subprocess.CalledProcessError as e:
+        pass
+    if output == "256":
+        # stat says it's a subvolume, although we don't think it is!
+        print("ghi")
+        print_msg(nontrivial_error, color="red")
+        sys.exit(1)
     return False
 
 def btrfs_list_snapshots(path):
@@ -540,9 +579,21 @@ def btrfs_has_given_snapshot(subvolume_path, snapshot_path):
             return True
     return False
 
-def check_stale_snapshot_transaction(service_path, service_name):
-    if os.path.exists(service_path, ".docker-services-snapshot.lock"):
-        return True
+def check_running_snapshot_transaction(service_path, service_name):
+    if os.path.exists(os.path.join(
+            service_path, ".docker-services-snapshot.lock")):
+        output = subprocess.check_output(
+            "ps aux | grep docker-services | grep -v grep | wc -l",
+            shell=True).decode("utf-8", "ignore")
+        if output.strip() != "1":
+            # another copy still running??
+            return True
+        print_msg("warning: stale snapshot lock found but no process " +\
+            "appears to be left around, removing.",
+            color="yellow", service=service_name)
+        # no longer running, remove file:
+        os.remove(os.path.join(service_path,
+            ".docker-services-snapshot.lock"))
     return False
 
 def clean_up():
@@ -566,10 +617,12 @@ def clean_up():
         if parts[0] == "CONTAINER ID":
             continue
         if len(parts) < 5 or (not parts[3].endswith("ago")):
-            print_msg("WARNING: skipping container " + parts[0] + ", cannot locate STATUS column")
+            print_msg("WARNING: skipping container " + parts[0] +\
+                ", cannot locate STATUS column")
             continue
         if parts[0].find(" ") >= 0:
-            print_msg("WARNING: skipping container with invalid container id: " + parts[0])
+            print_msg("WARNING: skipping container with invalid " +\
+                "container id: " + parts[0])
             continue
         if len(parts) == 6 and parts[4].find("_") >= 0:
             parts = parts[:4] + [ '' ] + parts[4:]
@@ -658,7 +711,7 @@ def btrfs_tool_check():
             color="red")
         sys.exit(1)
 
-def snapshot_btrfs_subvolume_check(service_path, service_name):
+def snapshot_subvolume_readiness_check(service_path, service_name):
     """ Check if the given service is ready for snapshotting or still needs
         btrfs subvolume conversion. Print a warning if not.
     """
@@ -691,6 +744,8 @@ def snapshot_btrfs_subvolume_check(service_path, service_name):
                     "snapshot " + service_name + "\n",
                     service=service_name, color="yellow")
                 return
+    # everything seems fine so far.
+    return
 
 def snapshot(directory, service):
     """ Make a backup of the live data of this service. """
@@ -699,7 +754,7 @@ def snapshot(directory, service):
     btrfs_path = locate_binary("btrfs")
 
     # make sure no snapshot is already in progress:
-    if check_stale_snapshot_transaction(directory, service):
+    if check_running_snapshot_transaction(directory, service):
         print_msg("error: snapshot already in progress. " +\
             "try again later", service=service,
             color="red")
@@ -728,13 +783,13 @@ def snapshot(directory, service):
     empty_snapshot = True
     for volume in volumes:
         relpath = os.path.relpath(
+            os.path.realpath(volume),
             os.path.realpath(os.path.join(directory, "livedata")),
-            os.path.realpath(volume)
         )
         if relpath.startswith(os.pardir + os.sep):
             # volume is not in livedata/!
-            print_msg("warning: volume '" + str(volume) + \
-                "' is NOT in livedata/ - " +\
+            print_msg("warning: volume " + str(volume) + \
+                " is NOT in livedata/ - " +\
                 "not covered by snapshot!", service=service, color="yellow")
         else:
             empty_snapshot = False
@@ -753,6 +808,46 @@ def snapshot(directory, service):
 
     livedata_dir = os.path.join(directory, "livedata")
     snapshot_dir = os.path.join(directory, ".btrfs-livedata-snapshot")
+    tempvolume_dir = os.path.join(directory, ".btrfs-livedata-temporary-volume")
+    tempdata_dir = os.path.join(directory, ".livedata-temporary-copy")
+
+    # make sure the livedata/ dir is a btrfs subvolume:    
+    if is_service_running(directory, service):
+        if not btrfs_is_subvolume(livedata_dir):
+            print_msg("error: can't do btrfs subvolume conversion because "+\
+                "service is running. The first snapshot is required to " +\
+                "be done when the service is stopped.", service=service,
+                color="red")
+            return False
+
+    lock_path = os.path.join(directory, ".docker-services-snapshot.lock")
+
+    # add a transaction lock:
+    transaction_id = str(uuid.uuid4())
+    with open(lock_path, "wb") as f:
+        f.write(transaction_id.encode("utf-8"))
+    
+    # wait a short amount of time so other race condition writes will
+    # be finished with a very high chance:
+    time.sleep(0.5)
+
+    # verify we got the transaction lock:
+    contents = None
+    with open(lock_path, "rb") as f:
+        contents = f.read().decode("utf-8", "ignore")
+    if contents.strip() != transaction_id:
+        print_msg("error: mid-air snapshot collision detected!! " + \
+            "Did you call the script twice?", service=service, color="red")
+        return False
+
+    # make sure the .livedata-temporary-copy directory is unused:
+    if os.path.exists(tempdata_dir):
+        print_msg("warning: .btrfs-livedata-snapshot/ already present! " \
+            + "This is probably a leftover from a previously " + \
+            "aborted attempt. Will now attempt to delete it...",
+            service=service, color="yellow")
+        shutil.rmtree(tempdata_dir)
+        assert(not os.path.exists(tempdata_dir))
 
     # make sure the btrfs snapshot path is unused:
     if os.path.exists(snapshot_dir):
@@ -761,7 +856,7 @@ def snapshot(directory, service):
                 + "This is probably a leftover from a previously " + \
                 "aborted attempt. Will now attempt to delete it...",
                 service=service, color="yellow")
-            # FIXME: remove here
+            raise RuntimeError("not implemented yet")
         else:
             print_msg("error: .btrfs-livedata-snapshot/ already present, " \
                 + "but it is not a btrfs snapshot!! I don't know how " + \
@@ -769,32 +864,60 @@ def snapshot(directory, service):
                 color="red")
             return False
 
-    # make sure the livedata/ dir is a btrfs subvolume:    
-    if is_service_running(service_path, service_name):
-        if not btrfs_is_subvolume(livedata_dir):
-            print_msg("error: can't do btrfs subvolume conversion because "+\
-                "service is running. The first snapshot is required to " +\
-                "be done when the service is stopped.", service=service,
-                color="red")
+    # make sure the temporary btrfs subvolume path is unused:
+    if os.path.exists(tempvolume_dir):
+        print_msg("warning: .btrfs-livedata-temporary-volume/ already " +\
+            "present! " \
+            + "This is probably a leftover from a previously " + \
+            "aborted attempt. Will now attempt to delete it...",
+            service=service, color="yellow")
+        output = subprocess.check_output([btrfs_path, "subvolume",
+            "delete", tempvolume_dir])
+        assert(not os.path.exists(tempvolume_dir))
+
+    # if this isn't a btrfs subvolume, we will need to fix that first:
+    if not btrfs_is_subvolume(livedata_dir):
+        print_msg("warning: initial subvolume conversion required. "+\
+            "DON'T TOUCH livedata/ WHILE THIS HAPPENS!!",
+            service=service, color="yellow")
+        try:
+            output = subprocess.check_output([btrfs_path, "subvolume",
+                "create", tempvolume_dir])
+        except Exception as e:
+            os.remove(lock_path)
+            raise e
+        assert(btrfs_is_subvolume(tempvolume_dir))
+
+        # copy all contents:
+        assert(not os.path.exists(tempdata_dir))
+        shutil.copytree(livedata_dir, tempdata_dir)
+        assert(os.path.exists(tempdata_dir))
+        for f in os.listdir(tempdata_dir):
+            orig_path = os.path.join(tempdata_dir, f)
+            new_path = os.path.join(tempvolume_dir, f)
+            shutil.move(orig_path, new_path)
+
+        # do a superficial check if we copied all things:
+        copy_failed = False
+        for f in os.listdir(tempvolume_dir):
+            if not os.path.exists(os.path.join(livedata_dir, f)):
+                copy_failed = True
+                break
+        for f in os.listdir(livedata_dir):
+            if not os.path.exists(os.path.join(tempvolume_dir, f)):
+                copy_failed = True
+                break
+        if copy_failed:
+            print_msg("error: files of old livedata/ directory and "+\
+                "new subvolume do not match. Did things get changed "+\
+                "during the process??", service=service, color="red")
             return False
 
-    # add a transaction lock:
-    transaction_id = str(uuid.uuid4())
-    with open(snapshot_dir, "wb") as f:
-        f.write(transaction_id)
-    
-    # wait a short amount of time so other race condition writes will
-    # be finished with a very high chance:
-    time.sleep(0.5)
-
-    # verify we got the transaction lock:
-    contents = None
-    with open(snapshot_dir, "rb") as f:
-        contents = f.read() 
-    if contents.strip() != transaction_id:
-        print_msg("error: mid-air snapshot collision detected!! " + \
-            "Did you call the script twice?", service=services, color="red")
-        return False
+        # remove old livedata/ dir:
+        shutil.rmtree(livedata_dir)
+        shutil.move(tempvolume_dir, livedata_dir)
+        print_msg("conversion of livedata/ to btrfs subvolume complete.",
+            service=service)
 
     # go ahead and snapshot:
     
@@ -850,8 +973,9 @@ if error_output != None:
         sys.exit(1)
 
 # check if services are btrfs ready:
-for service in services:
-    snapshot_btrfs_subvolume_check(service["folder"], service["name"])
+if args.action != "snapshot":
+    for service in services:
+        snapshot_subvolume_readiness_check(service["folder"], service["name"])
 
 # --- Main handling of actions here:
 
