@@ -580,10 +580,9 @@ def btrfs_tool_check():
             color="red")
         sys.exit(1)
 
-def snapshot_btrfs_subvolume_conversion(service_path, service_name):
+def snapshot_btrfs_subvolume_check(service_path, service_name):
     """ Check if the given service is ready for snapshotting or still needs
-        btrfs subvolume conversion. Do it if required, or print a warning
-        if not possible right now.
+        btrfs subvolume conversion. Print a warning if not.
     """
     fs = filesystem_of_path(service["folder"])
     if fs != "btrfs":
@@ -598,18 +597,22 @@ def snapshot_btrfs_subvolume_conversion(service_path, service_name):
             if is_service_running(service_path, service_name):
                 print_msg("the livedata/ dir of this service will " +\
                     "still need to be converted to a subvolume to " +\
-                    "enable snapshots. " +\
-                    "However, for this the service needs to be stopped.",
+                    "enable snapshots.\n" + \
+                    "Fix it by doing this:\n" + \
+                    "1. Stop the service with: docker-services.py stop " +\
+                        service_name + "\n" + \
+                    "2. Snapshot the service once with: docker-services.py "+\
+                        "snapshot " + service_name + "\n",
                     service=service_name, color="yellow")
-                print_msg("terminate the service and call " + \
-                    "'docker-services.py snapshot " + service_name + "'"\
-                    + " to prompt subvolume conversion.", color="yellow")
                 return
             else:
                 print_msg("the livedata/ dir of this service still " +\
-                    "needs conversion to btrfs subvolume, doing this "+\
-                    "now...", service=service_name, color="yellow")
-
+                    "needs conversion to btrfs subvolume.\n" +\
+                    "Fix it by snapshotting it once with: " +\
+                    "docker-services.py "+\
+                    "snapshot " + service_name + "\n",
+                    service=service_name, color="yellow")
+                return
 def snapshot(directory, service):
     """ Make a backup of the live data of this service. """
 
@@ -686,7 +689,16 @@ def snapshot(directory, service):
                 "to deal with this, aborting snapshot.", service=service,
                 color="red")
             return False
-    
+
+    # make sure the livedata/ dir is a btrfs subvolume:    
+    if is_service_running(service_path, service_name):
+        if not btrfs_is_subvolume(livedata_dir):
+            print_msg("error: can't do btrfs subvolume conversion because "+\
+                "service is running. The first snapshot is required to " +\
+                "be done when the service is stopped.", service=service,
+                color="red")
+            return False
+
     # add a transaction lock:
     transaction_id = str(uuid.uuid4())
     with open(snapshot_dir, "wb") as f:
@@ -760,7 +772,7 @@ if error_output != None:
 
 # check if services are btrfs ready:
 for service in services:
-    snapshot_btrfs_subvolume_conversion(service["folder"], service["name"])
+    snapshot_btrfs_subvolume_check(service["folder"], service["name"])
 
 # --- Main handling of actions here:
 
