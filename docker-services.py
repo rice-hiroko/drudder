@@ -441,12 +441,60 @@ def get_service_volumes(service_path, service_name, rw_only=False):
         resulting_volumes.add(volume)
     return resulting_volumes
 
+def get_volume_mount(path):
+    if not os.path.exists(path):
+        raise ValueError("given path does not exist: " + str(path))
+    output = subprocess.check_output([locate_binary("df"), path]).\
+        decode("utf-8", "ignore").strip()
+
+    # skip first line:
+    if output.find("\n") <= 0:
+        raise RuntimeError("failed to parse df output")
+    output = output[output.find("\n")+1:]
+
+    # skip past first entry:
+    skip_pos = output.find(" ")
+    if skip_pos <= 0 or skip_pos >= len(output):
+        raise RuntimeError("failed to parse df output")
+    output = output[skip_pos:1].strip()
+
+    # skip past all entries not starting with /
+    while True:
+        fwslash = output.find("/")
+        spacepos = output.find(" ")
+        if fwslash <= 0:
+            raise RuntimeError("failed to parse df output")
+        if spacepos >= 0 and spacepos < fwslash:
+            output = output[spacepos+1:].strip()
+            continue
+        break
+
+    # the remaining entry should be the mount point:
+    if not os.path.exists(output):
+        raise RuntimeError("returned mountpoint expected " +\
+            "to be directory, but apparently it doesn't exist")
+
+    return output
+
 def btrfs_is_subvolume(path):
     """ Check if the given path is a btrfs subvolume.
     """
-    raise RuntimeError("not implemented yet")
+    # first, get the containing mount point:
+    mount = get_volume_mount(path)
 
-def btrfs_ask_for_snapshots(path):
+    # get btrfs subvolume list:
+    output = subprocess.check_output([locate_binary("btrfs"), path]).\
+        decode("utf-8", "ignore").strip().split("\n")
+    for line in output:
+        if not line.startswith("ID ") or line.find(" path ") < 0:
+            raise RuntimeError("unexpected btrfs tool output - " + \
+                "maybe incompatible tool version? Please report this.")
+        line = line[line.find(" path ")+len(" path "):].strip()
+        if line == path:
+            return True
+    return False
+
+def btrfs_list_snapshots(path):
     """ Get a list of all the file paths representing snapshot volumes of the
         btrfs subvolume at the given path.
     """
@@ -456,7 +504,7 @@ def btrfs_has_given_snapshot(subvolume_path, snapshot_path):
     """ Check if the given subvolume has a btrfs snapshot at the given
         snapshot path.
     """
-    snapshots = btrfs_ask_for_snapshots(subvolume_path)
+    snapshots = btrfs_list_snapshots(subvolume_path)
     for snapshot in snapshots:
         if os.path.normpath(os.path.abspath(snapshot)) == \
                 os.path.normpath(os.path.abspath(snapshot_path)):
@@ -613,6 +661,7 @@ def snapshot_btrfs_subvolume_check(service_path, service_name):
                     "snapshot " + service_name + "\n",
                     service=service_name, color="yellow")
                 return
+
 def snapshot(directory, service):
     """ Make a backup of the live data of this service. """
 
