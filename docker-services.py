@@ -284,22 +284,29 @@ def print_msg(text, service=None, color="blue"):
     """ Print out a nicely formatted message prefixed with
         [docker-services.py] and possibly a service name.
     """
+    def color_code():
+        part = "\033[1;"
+        if color == "blue":
+            part += "34"
+        elif color == "red":
+            part += "31"
+        elif color == "yellow":
+            part += "33"
+        elif color == "green":
+            part += "32"
+        elif color == "white":
+            part += "37"
+        return part + "m"
+
     service_part = ""
     if service != None and len(service) > 0:
-        service_part = "/\033[1;"
-        if color == "blue":
-            service_part += "34"
-        elif color == "red":
-            service_part += "31"
-        elif color == "yellow":
-            service_part += "33"
-        elif color == "green":
-            service_part += "32"
-        elif color == "white":
-            service_part += "37"
-        service_part += "m" + service
+        service_part = "\033[0m/" + color_code() + service
+
+    docker_services_part = "docker-services.py"
+    if service == None or len(service) == 0:
+        docker_services_part = color_code() + "docker-services.py"
  
-    print("\033[0m\033[1m[\033[1mdocker-services.py" + \
+    print("\033[0m\033[1m[\033[0m" + docker_services_part + \
         service_part + "\033[0m\033[1m] \033[0m" + \
         text + "\033[0m")
 
@@ -364,9 +371,20 @@ def get_running_service_containers(service_path, service_name):
         Returns a list of container ids.
     """
     running_containers = []
-    output = subprocess.check_output([docker_compose_path(), "ps"],
-        cwd=service_path).decode("utf-8", "ignore").\
+    try:
+        output = subprocess.check_output([docker_compose_path(), "ps"],
+            cwd=service_path, stderr=subprocess.STDOUT).\
+            decode("utf-8", "ignore")
+    except subprocess.CalledProcessError as e:
+        output = e.output.decode("utf-8", "ignore")
+        if output.find("client and server don't have same version") >= 0:
+            print_msg("error: it appears docker-compose is installed with " +\
+                "a version incompatible to docker.", color="red")
+            sys.exit(1)
+    output = output.\
         replace("\r", "\n").replace("\n\n", "").split("\n")
+
+
     skipped_past_dashes = False
     for output_line in output:
         if len(output_line.strip()) == 0:
