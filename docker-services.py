@@ -338,6 +338,8 @@ class LaunchThreaded(threading.Thread):
     def run(self):
         print_msg("launching...", service=self.name, color="blue")
         try:
+            subprocess.check_call([docker_compose_path(), "build"],
+                cwd=self.path)
             subprocess.check_call([docker_compose_path(), "up", "-d"],
                 cwd=self.path)
             print_msg("now running.", service=self.name, color="green")
