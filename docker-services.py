@@ -446,13 +446,13 @@ def get_volumes_from_compose_yml(service_path, service_name, rw_only=False):
 
             # make sure path is absolute:
             if len(parts) >= 2:
-                if not os.path.isabs(parts[1]):
-                    parts[1] = os.path.join(service_path, parts[1])
-                    parts[1] = os.path.normpath(os.path.abspath(parts[1]))
+                if not os.path.isabs(parts[0]):
+                    parts[0] = os.path.join(service_path, parts[0])
+                    parts[0] = os.path.normpath(os.path.abspath(parts[0]))
 
             # add to list:
             if len(parts) >= 2 and (rwro == "rw" or not rw_only):
-                volumes.append(parts[1])
+                volumes.append(parts[0])
     f.close()
     return volumes
 
