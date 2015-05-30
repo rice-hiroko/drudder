@@ -712,7 +712,7 @@ def snapshot_subvolume_readiness_check(service_path, service_name):
 
     btrfs_tool_check()
 
-    if os.path.join(service_path, "livedata"):
+    if os.path.exists(os.path.join(service_path, "livedata")):
         if not btrfs_is_subvolume(os.path.join(service_path, "livedata"))\
                 and len(get_service_volumes(service_path, service_name,\
                 rw_only=True)) > 0:
