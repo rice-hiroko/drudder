@@ -53,6 +53,8 @@ freely, subject to the following restrictions:
       docker-services.py start <service>     - starts the specified service
       docker-services.py stop <service>      - stops the specified service
       docker-services.py restart <service>   - restarts the given service      
+      docker-services.py logs <service>      - print logs of all docker 
+                                               containers of the service
       docker-services.py snapshot <service>  - makes a snapshot of the live
                                                data if enabled (optional)
       docker-services.py clean               - deletes all containers that
@@ -383,6 +385,62 @@ def get_container_volumes(container_id, rw_only=False):
                 volumes_list.remove(volume)
     return volumes_list
 
+def get_service_container_names(service_path, service_name):
+    """ Get the label names of all containers specified for the given service,
+        no matter if running or even created at the moment or not.
+
+        Those names are what the most recently created current container of
+        each service is named like. If the service has no container yet, it
+        will still have the future name returned in this listing.
+    """
+    f = open(os.path.join(service_path, "docker-compose.yml"), "rb")
+    contents = f.read().decode("utf-8", "ignore").replace("\r\n", "\n").\
+        replace("\r", "\n").replace("\t", " ").split("\n")
+    results = []
+    smallest_observed_indentation = 999
+    def count_indentation(line):
+        i = 0
+        while i < len(line) and line[i] == " ":
+            i += 1
+        return i
+    current_service_name = None
+    i = 0
+    for line in contents:
+        next_line = None
+        i += 1
+        if i < len(contents):
+            next_line = contents[i]
+
+        if not (line.startswith(" ")):
+            # this is the service name:
+            current_service_name = line.partition(":")[0].strip().\
+                partition(" ")[0]
+        elif count_indentation(line) < smallest_observed_indentation:
+            # this is a line inside the service declaration.
+            keyword = line.partition(":")[0].strip().partition(" ")[0]
+            value = line.partition(":")[2].strip()
+            if len(value) == 0:
+                value = next_line.strip()
+            if keyword == "build":
+                # this service build from a directory. get name of directory:
+                build_path = os.path.normpath(\
+                    os.path.join(service_path, value))
+                while build_path.endswith("/"):
+                    build_path = build_path[:-1]
+                build_name = os.path.basename(build_path)
+                
+                # this is the resulting container name:
+                results.append(current_service_name + "_" +\
+                    build_name + "_1")
+            elif keyword == "image":
+                # this container is constructed from an image:
+                image_name = value
+
+                # this is the resulting container name:
+                results.append(current_service_name + "_" + \
+                    build_name + "_1")
+    return results
+
 def get_running_service_containers(service_path, service_name):
     """ Get all running containers of the given service.
         Returns a list of container ids.
@@ -424,7 +482,7 @@ def get_volumes_from_compose_yml(service_path, service_name, rw_only=False):
     volumes = []
     f = open(os.path.join(service_path, "docker-compose.yml"), "rb")
     contents = f.read().decode("utf-8", "ignore").replace("\r\n", "\n").\
-        replace("\r", "\n").split("\n")
+        replace("\r", "\n").replace("\t", " ").split("\n")
     in_volume_list = False
     for line in contents:
         if line.strip() == "":
@@ -638,10 +696,14 @@ parser.add_argument("action",
 
     "restart": restart the service specified as argument (or "all" for all).
 
+    "logs": output the logs of all the docker containers of the service
+            specified as argument (or "all" for all).
+
     "snapshot": store an atomic snapshot of the live data of the service
                 specified as argument (from livedata/) in livedata-snapshots/
 
-    "clean": clean up all stopped containers. THIS IS NOT REVERSIBLE.''')
+    "clean": clean up all stopped containers. THIS IS NOT REVERSIBLE. The
+             docker images of course won't be touched. ''')
     )
 parser.add_argument("argument", nargs="*", help="argument to given action")
 if len(" ".join(sys.argv[1:]).strip()) == 0:
@@ -903,7 +965,7 @@ def snapshot(directory, service):
 
         # copy all contents:
         assert(not os.path.exists(tempdata_dir))
-        shutil.copytree(livedata_dir, tempdata_dir)
+        shutil.copytree(livedata_dir, tempdata_dir, symlinks=True)
         assert(os.path.exists(tempdata_dir))
         for f in os.listdir(tempdata_dir):
             orig_path = os.path.join(tempdata_dir, f)
@@ -985,7 +1047,7 @@ def snapshot(directory, service):
         snapshot_name)
     print_msg("copying to " + snapshot_specific_dir,
         service=service)
-    shutil.copytree(snapshot_dir, snapshot_specific_dir)
+    shutil.copytree(snapshot_dir, snapshot_specific_dir, symlinks=True)
     subprocess.check_output([btrfs_path, "subvolume",
         "delete", snapshot_dir])
     assert(not os.path.exists(snapshot_dir))
@@ -1059,6 +1121,30 @@ if args.action == "list" or args.action == "ps" or args.action == "status":
 elif args.action == "help":
     parser.print_help()
     sys.exit(1)
+elif args.action == "logs":
+    if len(args.argument) == 0:
+        print("docker-services.py: error: please specify the name " + \
+            "of the service for which docker logs shold be printed, "+\
+            "or \"all\"", file=sys.stderr)
+        sys.exit(1)
+    specified_services = verify_service_names(args.argument)
+    i = 0
+    while i < len(specified_services):
+        service = specified_services[i]
+        names = get_service_container_names(service["folder"],\
+            service["name"])
+        for name in names:
+            print_msg("printing log of container " + name,
+                service=service['name'], color='blue')
+            try:
+                subprocess.check_output([docker_path(), "ps"],
+                    stderr=subprocess.STDOUT) 
+            except subprocess.CalledProcessError:
+                print_msg("failed. maybe container has no logs yet?",
+                    service=service['name'], color='yellow')
+                pass
+        i += 1
+
 elif args.action == "start" or args.action == "restart":
     if len(args.argument) == 0:
         print("docker-services.py: error: please specify the name " + \
