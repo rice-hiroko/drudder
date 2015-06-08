@@ -31,6 +31,10 @@ Usage:
   docker-services.py start <service>     - starts the specified service
   docker-services.py stop <service>      - stops the specified service
   docker-services.py restart <service>   - restarts the given service      
+  docker-services.py logs <service>      - print logs of all docker 
+                                           containers of the service
+  docker-services.py shell <service> <subservice>  - run a shell in the
+                                                     specified subservice.
   docker-services.py snapshot <service>  - makes a snapshot of the live
                                            data if enabled (optional)
   docker-services.py clean               - deletes all containers that

@@ -55,6 +55,8 @@ freely, subject to the following restrictions:
       docker-services.py restart <service>   - restarts the given service      
       docker-services.py logs <service>      - print logs of all docker 
                                                containers of the service
+      docker-services.py shell <service> <subservice>  - run a shell in the
+                                                         specified subservice.
       docker-services.py snapshot <service>  - makes a snapshot of the live
                                                data if enabled (optional)
       docker-services.py clean               - deletes all containers that
@@ -427,11 +429,11 @@ def get_service_container_names(service_path, service_name):
                     os.path.join(service_path, value))
                 while build_path.endswith("/"):
                     build_path = build_path[:-1]
-                build_name = os.path.basename(build_path)
+                build_name = os.path.basename(build_path).replace("-", "")
                 
                 # this is the resulting container name:
-                results.append(current_service_name + "_" +\
-                    build_name + "_1")
+                results.append(build_name + "_" +\
+                    current_service_name + "_1")
             elif keyword == "image":
                 # this container is constructed from an image:
                 image_name = value
@@ -440,6 +442,24 @@ def get_service_container_names(service_path, service_name):
                 results.append(current_service_name + "_" + \
                     build_name + "_1")
     return results
+
+def fix_container_name(service_path, service_name, container_name):
+    """ Sometimes docker-compose gives us just a shortened name for a
+        container. While I am not fully aware of the algorithm, I assume it
+        will usually still be unique. In this function, we try to get back to
+        the full unshortened name.
+    """
+    names = get_service_container_names(service_path, service_name)
+    if container_name in names:
+        return container_name
+    matched_name = None
+    for name in names:
+        if name.startswith(container_name):
+            if matched_name != None:
+                raise RuntimeError("encountered unexpected non-unique " +\
+                    "container label")
+            matched_name = name
+    return matched_name
 
 def get_running_service_containers(service_path, service_name):
     """ Get all running containers of the given service.
@@ -460,7 +480,6 @@ def get_running_service_containers(service_path, service_name):
     output = output.\
         replace("\r", "\n").replace("\n\n", "").split("\n")
 
-
     skipped_past_dashes = False
     for output_line in output:
         if len(output_line.strip()) == 0:
@@ -473,7 +492,8 @@ def get_running_service_containers(service_path, service_name):
             # this is a running container!
             space_pos = output_line.find(" ")
             running_containers.append(output_line[:space_pos])
-    return running_containers
+    return [fix_container_name(service_path, service_name, container) \
+        for container in running_containers]
 
 def get_volumes_from_compose_yml(service_path, service_name, rw_only=False):
     """ Attempt to parse and return all volumes used by a service from the
@@ -699,13 +719,18 @@ parser.add_argument("action",
     "logs": output the logs of all the docker containers of the service
             specified as argument (or "all" for all).
 
+    "shell": start an interactive shell in the specified service's specified
+             subservice (parameters: <service> <subservice>) - the subservice
+             is optional if the docker-compose.yml has just one
+             container/subservice.
+
     "snapshot": store an atomic snapshot of the live data of the service
                 specified as argument (from livedata/) in livedata-snapshots/
 
     "clean": clean up all stopped containers. THIS IS NOT REVERSIBLE. The
              docker images of course won't be touched. ''')
     )
-parser.add_argument("argument", nargs="*", help="argument to given action")
+parser.add_argument("argument", nargs="*", help="argument(s) to given action")
 if len(" ".join(sys.argv[1:]).strip()) == 0:
     parser.print_help()
     sys.exit(1)
@@ -730,8 +755,8 @@ def verify_service_names(names):
                 found = service
                 break
         if found == None:
-            print("docker-services.py: error: no such service found: " + \
-            specified_service, file=sys.stderr)
+            print("docker-services.py: error: no such service found: " +\
+                specified_service, file=sys.stderr)
             sys.exit(1)
         specified_services.append(found)
     return specified_services
@@ -1144,7 +1169,70 @@ elif args.action == "logs":
                     service=service['name'], color='yellow')
                 pass
         i += 1
-
+elif args.action == "shell":
+    if len(args.argument) == 0:
+        print("docker-services.py: error: please specify the name " + \
+            "of the service for which an interactive shell should be started",
+            file=sys.stderr)
+        sys.exit(1)
+    if len(args.argument) > 1:
+        specified_services = verify_service_names(args.argument[:-1])
+    else:
+        specified_services = verify_service_names(args.argument)
+    if len(specified_services) != 1:
+        print("docker-services.py: error: this command can only be used " + \
+            "on a single service",
+            file=sys.stderr)
+        sys.exit(1)
+    service = specified_services[0]
+    names = get_service_container_names(service["folder"],\
+        service["name"])
+    if len(names) == 0:
+        print("docker-services.py: error: the specified service " +\
+            "doesn't seem to have any subservices/containers",
+            file=sys.stderr)
+        sys.exit(1)
+    if len(names) > 1:
+        if len(args.argument) == 1:
+            print("docker-services.py: error: this service has " +\
+                str(names) + " subservices/containers. Therefore, "+\
+                "specify the name of the subservice.",
+                file=sys.stderr)
+            sys.exit(1)
+        for name in names:
+            if name.startswith(args.argument[-1] + "_"):
+                names = [name]
+                break
+        if len(names) > 1:
+            print("docker-services.py: error: specified subservice " +\
+                "not found", 
+                file=sys.stderr)
+            sys.exit(1)
+    if len(args.argument) > 1 and (not names[0].startswith(\
+            args.argument[-1])):
+        print("docker-services.py: error: specified subservice " +\
+            "not found",
+            file=sys.stderr)
+        sys.exit(1)
+    if names[0] in get_running_service_containers(service["folder"], \
+            service["name"]):
+        print_msg("attaching to running container " + str(names[0]),
+            service=service['name'],\
+            color="blue")
+        subprocess.call([docker_path(), "exec", "-t", "-i",
+                names[0], "/bin/bash"],
+            stderr=subprocess.STDOUT)
+    else:
+        print_msg("launching container " + str(names[0]) + \
+            " with shell",
+            service=service['name'],\
+            color="blue")
+        image_name = names[0]
+        if image_name.endswith("_1"):
+            image_name = image_name[:-len("_1")]
+        subservice_name = image_name.partition("_")[2]
+        subprocess.call([docker_compose_path(), "run",
+            subservice_name, "/bin/bash"], cwd=service["folder"])
 elif args.action == "start" or args.action == "restart":
     if len(args.argument) == 0:
         print("docker-services.py: error: please specify the name " + \
