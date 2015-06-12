@@ -168,6 +168,9 @@ import threading
 import time
 import uuid
 
+# our list of known services:
+services = []
+
 class DoubleLineBreakFormatter(HelpFormatter):
     """ Retains double line breaks/paragraphs """
     def _split_lines(self, text, width):
@@ -329,63 +332,41 @@ def print_msg(text, service=None, color="blue"):
             initial_length:] + \
         "\033[0m")
 
-class LaunchThreaded(threading.Thread):
-    """ A helper to launch a service and wait for the launch only for a
-        limited amount of time, and moving the launch into a background
-        thread if it takes too long.
+def get_external_link_references_from_compose_yml(service_path, service_name):
+    """ Attempt to parse and return all containers referenced as external
+        links used by a service from the respective docker-compose.yml of that
+        service.
     """
-    def __init__(self, service_dir, service_name):
-        super().__init__()
-        self.name = service_name
-        self.path = service_dir
+    external_links = []
+    f = open(os.path.join(service_path, "docker-compose.yml"), "rb")
+    contents = f.read().decode("utf-8", "ignore").replace("\r\n", "\n").\
+        replace("\r", "\n").split("\n")
+    in_external_links_list = False
+    for line in contents:
+        if line.strip() == "":
+            continue
+        if line.startswith(" ") and (line.strip().startswith("external_links ")
+                or line.strip().startswith("external_links:")):
+            in_external_links_list = True
 
-    def run(self):
-        print_msg("launching...", service=self.name, color="blue")
-        try:
-            subprocess.check_call([docker_compose_path(), "build"],
-                cwd=self.path)
-            subprocess.check_call([docker_compose_path(), "up", "-d"],
-                cwd=self.path)
-            print_msg("now running.", service=self.name, color="green")
-        except subprocess.CalledProcessError:
-            print_msg("failed to launch.", service=self.name, color="red")
+            # parse remaining stuff in line:
+            i = line.find("external_links")
+            line = line[i+len("external_links"):].strip()
+            if line.startswith(":"):
+                line = line[1:].strip()
+            if len(line) == 0:
+                continue
 
-    @staticmethod
-    def attempt_launch(directory, service, to_background_timeout=5):
-        """ Launch a given service and wait for it to run for a few seconds.
-            If that isn't long enough for it to start running, return
-            execution to possibly launch further services while this one is
-            still busy launching.
-        """
-        launch_t = LaunchThreaded(directory, service)
-        launch_t.start()
-        
-        launch_t.join(to_background_timeout)
-        if launch_t.isAlive():
-            print_msg("Maximum waiting time exceeded, " + \
-                "resuming launch in background.", service=service,
-                color="yellow")    
-
-    @staticmethod
-    def stop(directory, service):
-        """ Stop a service. """
-        subprocess.check_call([docker_compose_path(), "stop"],
-            cwd=directory)
-
-def get_container_volumes(container_id, rw_only=False):
-    """ Get a list of all volumes of the specified container. """
-    output = subprocess.check_output([docker_path(), "inspect", container_id])
-    result = json.loads(output.decode("utf-8", "ignore"))
-    volumes_list = []
-    for volume in result[0]["Volumes"]:
-        volumes_list.append(volume)
-    if rw_only:
-        if not ("VolumesRW" in result[0]):
-            return []
-        for volume in result[0]["Volumes"]:
-            if not result[0]["VolumesRW"][volume]:
-                volumes_list.remove(volume)
-    return volumes_list
+        if in_external_links_list:
+            if not line.strip().startswith("-"):
+                in_external_links_list = False
+                continue
+            line = line[line.find("-")+1:].strip()
+            parts = line.split(":")
+            
+            external_links.append(parts[0])
+    f.close()
+    return external_links
 
 def get_service_container_names(service_path, service_name):
     """ Get the label names of all containers specified for the given service,
@@ -442,6 +423,82 @@ def get_service_container_names(service_path, service_name):
                 results.append(current_service_name + "_" + \
                     build_name + "_1")
     return results
+
+def get_service_dependencies(service_path, service_name):
+    global services
+    # collect all external_links container references:
+    deps = get_external_link_references_from_compose_yml(service_path,
+        service_name)
+    dependent_services = []
+    if len(deps) > 0:
+        # find out which other service owns the container and add it:
+        for dep in deps:
+            for service in services:
+                service_container_names = get_service_container_names(
+                    service["folder"], service["name"])
+                if dep in service_container_names:
+                    dependent_services.append({
+                        "folder" : service["folder"],\
+                        "name" : service["name"]
+                    })
+    return dependent_services
+
+class LaunchThreaded(threading.Thread):
+    """ A helper to launch a service and wait for the launch only for a
+        limited amount of time, and moving the launch into a background
+        thread if it takes too long.
+    """
+    def __init__(self, service_dir, service_name):
+        super().__init__()
+        self.name = service_name
+        self.path = service_dir
+
+    def run(self):
+        print_msg("launching...", service=self.name, color="blue")
+        try:
+            subprocess.check_call([docker_compose_path(), "build"],
+                cwd=self.path)
+            subprocess.check_call([docker_compose_path(), "up", "-d"],
+                cwd=self.path)
+            print_msg("now running.", service=self.name, color="green")
+        except subprocess.CalledProcessError:
+            print_msg("failed to launch.", service=self.name, color="red")
+
+    @staticmethod
+    def attempt_launch(directory, service, to_background_timeout=5):
+        """ Launch a given service and wait for it to run for a few seconds.
+            If that isn't long enough for it to start running, return
+            execution to possibly launch further services while this one is
+            still busy launching.
+        """
+        launch_t = LaunchThreaded(directory, service)
+        launch_t.start()
+        
+        launch_t.join(to_background_timeout)
+        if launch_t.isAlive():
+            print_msg("Maximum waiting time exceeded, " + \
+                "resuming launch in background.", service=service,
+                color="yellow")    
+
+    @staticmethod
+    def stop(directory, service):
+        """ Stop a service. """
+        subprocess.check_call([docker_compose_path(), "stop"],
+
+def get_existing_container_volumes(container_id, rw_only=False):
+    """ Get a list of all volumes of the specified container. """
+    output = subprocess.check_output([docker_path(), "inspect", container_id])
+    result = json.loads(output.decode("utf-8", "ignore"))
+    volumes_list = []
+    for volume in result[0]["Volumes"]:
+        volumes_list.append(volume)
+    if rw_only:
+        if not ("VolumesRW" in result[0]):
+            return []
+        for volume in result[0]["Volumes"]:
+            if not result[0]["VolumesRW"][volume]:
+                volumes_list.remove(volume)
+    return volumes_list
 
 def fix_container_name(service_path, service_name, container_name):
     """ Sometimes docker-compose gives us just a shortened name for a
@@ -510,7 +567,15 @@ def get_volumes_from_compose_yml(service_path, service_name, rw_only=False):
         if line.startswith(" ") and (line.strip().startswith("volumes ")
                 or line.strip().startswith("volumes:")):
             in_volume_list = True
-            continue
+
+            # parse remaining stuff in line:
+            i = line.find("volumes")
+            line = line[i+len("volumes"):].strip()
+            if line.startswith(":"):
+                line = line[1:].strip()
+            if len(line) == 0:
+                continue
+
         if in_volume_list:
             if not line.strip().startswith("-"):
                 in_volume_list = False
@@ -545,7 +610,7 @@ def get_service_volumes(service_path, service_name, rw_only=False):
     resulting_volumes = set()
     for container in get_running_service_containers(service_path,
             service_name):
-        volumes = get_container_volumes(container, rw_only=rw_only)
+        volumes = get_existing_container_volumes(container, rw_only=rw_only)
         for volume in volumes:
             volume = os.path.join(service_path, volume)
             volume = os.path.normpath(os.path.abspath(volume))
@@ -1089,7 +1154,6 @@ def unknown_action(hint=None):
     sys.exit(1)
 
 # scan for services:
-services = []
 def scan_dir(d):
     for f in os.listdir(d):
         if os.path.isdir(os.path.join(d, f)):
@@ -1239,6 +1303,26 @@ elif args.action == "start" or args.action == "restart":
             "of the service to be started, or \"all\"", file=sys.stderr)
         sys.exit(1)
     specified_services = verify_service_names(args.argument)
+        
+    # collect the required dependencies to launch services:
+    dependencies_added = True
+    while dependencies_added:
+        dependencies_added = False
+        deps = []
+        for service in specified_services:
+            # we only care about things we're not restarting:
+            if not is_service_running(service['folder'],\
+                    service['name']:
+                # collect deps:
+                new_deps = get_service_dependencies(service["folder"],\
+                    service["name"])
+                deps += new_deps
+        # see if all dependencies are in our list, if not then add:
+        for dep in deps:
+            if not (dep in specified_services):
+                specified_services = [dep] + specified_services
+                dependencies_added = True
+ 
     i = 0
     while i < len(specified_services):
         service = specified_services[i]
