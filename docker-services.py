@@ -484,6 +484,7 @@ class LaunchThreaded(threading.Thread):
     def stop(directory, service):
         """ Stop a service. """
         subprocess.check_call([docker_compose_path(), "stop"],
+            cwd=directory)
 
 def get_existing_container_volumes(container_id, rw_only=False):
     """ Get a list of all volumes of the specified container. """
@@ -1312,7 +1313,7 @@ elif args.action == "start" or args.action == "restart":
         for service in specified_services:
             # we only care about things we're not restarting:
             if not is_service_running(service['folder'],\
-                    service['name']:
+                    service['name']):
                 # collect deps:
                 new_deps = get_service_dependencies(service["folder"],\
                     service["name"])
