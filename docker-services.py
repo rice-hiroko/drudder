@@ -454,6 +454,28 @@ class LaunchThreaded(threading.Thread):
         self.path = service_dir
 
     def run(self):
+        perm_info = get_permission_info_from_yml(self.name, self.path)
+        if ("owner" in perm_info["livedata-permissions"]) \
+                and os.path.exists(os.path.join(self.path, "livedata")):
+            print_msg("ensuring file permissions of livedata folder...",\
+                service=self.name, color="blue")
+            owner = perm_info["livedata-permissions"]["owner"]
+            try:
+                owner = int(owner)
+            except TypeError:
+                # must be a name.
+                try:
+                    owner = getpwnam(owner).pw_uid
+                except KeyError:
+                    print_msg("invalid user specified for permissions: "+\
+                        "can't get uid for user: " + owner, color="red")
+                    raise RuntimeError("invalid user")
+            for root, dirs, files in os.walk(os.path.join(self.path, \
+                    "livedata")):
+                for f in (dirs + files):
+                    fpath = os.path.join(root, f)
+                    os.chown(fpath, owner, -1, follow_symlinks=False)
+
         print_msg("launching...", service=self.name, color="blue")
         try:
             subprocess.check_call([docker_compose_path(), "build"],
@@ -552,6 +574,59 @@ def get_running_service_containers(service_path, service_name):
             running_containers.append(output_line[:space_pos])
     return [fix_container_name(service_path, service_name, container) \
         for container in running_containers]
+
+def get_permission_info_from_yml(service_path, service_name):
+    """ Get permission info for the given service
+    """
+    f = None
+    try:
+        f = open(os.path.join(service_path, "permissions.yml"), "rb")
+    except Exception as e:
+        return dict()
+    perm_dict = dict()
+    current_area = None
+    contents = f.read().decode("utf-8", "ignore").replace("\r\n", "\n").\
+        replace("\r", "\n").replace("\t", " ").split("\n")
+    for line in contents:
+        if line.strip() == "":
+            continue
+        if not line.startswith(" ") and not line.startswith("\t"):
+            line = line.strip()
+            if not line.endswith(":"):
+                print_msg("error: syntax error in permissions.yml: " +\
+                    "colon expected", service=service, color="red")
+                raise RuntimeError("invalid syntax")
+            line = line[:-1]
+            # this specifies the current area
+            if line == "livedata-permissions":
+                current_area = "livedata-permissions"
+            else:
+                print_msg("warning: unrecognized permissions.yml " +\
+                    "section: " + str(line), service=service,
+                    color="red")
+                continue
+            if not current_area in perm_dict:
+                perm_dict[current_area] = dict()
+            continue
+        elif line.startswith(" ") or line.startswith("\t"):
+            if current_area == None:
+                print_msg("error: syntax error in permissions.yml: " +\
+                    "unexpected value outside of block",
+                    service=service, color="red")
+                raise RuntimeError("invalid syntax")
+            k = line.partition(":")[0].strip()
+            v = line.partition(":")[2].strip()
+            perm_dict[current_area][k] = v
+
+            continue
+    f.close()
+    
+    # make sure some stuff is present:
+    if not "livedata-permissions" in perm_dict:
+        perm_dict["livedata-permissions"] = dict()
+
+    return perm_dict
+
 
 def get_volumes_from_compose_yml(service_path, service_name, rw_only=False):
     """ Attempt to parse and return all volumes used by a service from the
