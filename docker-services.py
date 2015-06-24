@@ -454,7 +454,7 @@ class LaunchThreaded(threading.Thread):
         self.path = service_dir
 
     def run(self):
-        perm_info = get_permission_info_from_yml(self.name, self.path)
+        perm_info = get_permission_info_from_yml(self.path, self.name)
         if ("owner" in perm_info["livedata-permissions"]) \
                 and os.path.exists(os.path.join(self.path, "livedata")):
             print_msg("ensuring file permissions of livedata folder...",\
@@ -482,9 +482,16 @@ class LaunchThreaded(threading.Thread):
                 cwd=self.path)
             subprocess.check_call([docker_compose_path(), "up", "-d"],
                 cwd=self.path)
+            time.sleep(1)
+            if not is_service_running(self.path, self.name):
+                print_msg("failed to launch. (nothing running after " +\
+                    "1 second)",\
+                    service=self.name, color="red")
+                return
             print_msg("now running.", service=self.name, color="green")
         except subprocess.CalledProcessError:
-            print_msg("failed to launch.", service=self.name, color="red")
+            print_msg("failed to launch. (error exit code)",\
+                service=self.name, color="red")
 
     @staticmethod
     def attempt_launch(directory, service, to_background_timeout=5):
@@ -582,7 +589,7 @@ def get_permission_info_from_yml(service_path, service_name):
     try:
         f = open(os.path.join(service_path, "permissions.yml"), "rb")
     except Exception as e:
-        return dict()
+        return {"livedata-permissions" : {}}
     perm_dict = dict()
     current_area = None
     contents = f.read().decode("utf-8", "ignore").replace("\r\n", "\n").\
