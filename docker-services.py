@@ -1242,11 +1242,18 @@ def scan_dir(d):
         if os.path.isdir(os.path.join(d, f)):
             if os.path.exists(os.path.join((os.path.join(d, f)),
                     "docker-compose.yml")):
-                services.append({
-                    'folder' : os.path.normpath(os.path.abspath(\
-                        os.path.join(d, f))),
-                    'name' : f,
-                })
+                def is_service_present(path):
+                    for service in services:
+                        if os.path.normpath(os.path.abspath(service["folder"]\
+                                )) == os.path.normpath(os.path.abspath(path)):
+                            return True
+                    return False
+                if not is_service_present(os.path.join(d, f)):
+                    services.append({
+                        'folder' : os.path.normpath(os.path.abspath(\
+                            os.path.join(d, f))),
+                        'name' : f,
+                    })
 scan_dir(os.getcwd())
 if os.path.exists(os.path.join(os.path.expanduser("~"), ".docker-services")):
     scan_dir(os.path.join(os.path.expanduser("~"), ".docker-services"))
