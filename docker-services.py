@@ -443,6 +443,8 @@ def get_service_dependencies(service_path, service_name):
                     })
     return dependent_services
 
+launch_threads = []
+
 class LaunchThreaded(threading.Thread):
     """ A helper to launch a service and wait for the launch only for a
         limited amount of time, and moving the launch into a background
@@ -500,6 +502,7 @@ class LaunchThreaded(threading.Thread):
             execution to possibly launch further services while this one is
             still busy launching.
         """
+        global launch_threads
         launch_t = LaunchThreaded(directory, service)
         launch_t.start()
         
@@ -507,13 +510,21 @@ class LaunchThreaded(threading.Thread):
         if launch_t.isAlive():
             print_msg("Maximum waiting time exceeded, " + \
                 "resuming launch in background.", service=service,
-                color="yellow")    
+                color="yellow")
+            launch_threads.append(launch_t)
 
     @staticmethod
     def stop(directory, service):
         """ Stop a service. """
         subprocess.check_call([docker_compose_path(), "stop"],
             cwd=directory)
+
+    @staticmethod
+    def wait_for_launches():
+        global launch_threads
+        for launch_t in launch_threads:
+            if launch_t.isAlive():
+                launch_t.join()
 
 def get_existing_container_volumes(container_id, rw_only=False):
     """ Get a list of all volumes of the specified container. """
@@ -1386,7 +1397,8 @@ elif args.action == "start" or args.action == "restart":
             "of the service to be started, or \"all\"", file=sys.stderr)
         sys.exit(1)
     specified_services = verify_service_names(args.argument)
-        
+    restart_only_services = []
+
     # collect the required dependencies to launch services:
     dependencies_added = True
     while dependencies_added:
@@ -1400,17 +1412,21 @@ elif args.action == "start" or args.action == "restart":
                 new_deps = get_service_dependencies(service["folder"],\
                     service["name"])
                 deps += new_deps
-        # see if all dependencies are in our list, if not then add:
+        # see if all dependencies are in our list, if not then add to separate
+        # start-only list:
         for dep in deps:
-            if not (dep in specified_services):
-                specified_services = [dep] + specified_services
+            if not (dep in specified_services) and \
+                    not (dep in restart_only_services):
+                restart_only_services = [dep] + restart_only_services
                 dependencies_added = True
- 
+
+    all_services = restart_only_services + specified_services
     i = 0
-    while i < len(specified_services):
-        service = specified_services[i]
+    while i < len(all_services):
+        service = all_services[i]
         if is_service_running(service['folder'], service['name']):
-            if args.action == "start":
+            # restart if requested:
+            if args.action == "start" or (service in restart_only_services):
                 print_msg("already running.", service=service['name'],\
                     color="green")
                 i += 1 
@@ -1419,13 +1435,14 @@ elif args.action == "start" or args.action == "restart":
                 color="blue")
             LaunchThreaded.stop(service["folder"], service['name']) 
         if i < len(specified_services) - 1:
-            # not the last service
+            # not the last service, allow it to go to background:
             LaunchThreaded.attempt_launch(service['folder'], service['name'])
         else:
-            # last service
+            # last service, handle this one blocking:
             LaunchThreaded.attempt_launch(service['folder'], service['name'],\
                 to_background_timeout=None)
         i += 1
+    LaunchThreaded.wait_for_launches()
 elif args.action == "stop":
     if len(args.argument) == 0:
         print("docker-services.py: error: please specify the name " + \
