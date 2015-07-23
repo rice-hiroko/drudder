@@ -1254,6 +1254,9 @@ def scan_dir(d):
             if os.path.exists(os.path.join((os.path.join(d, f)),
                     "docker-compose.yml")):
                 def is_service_present(path):
+                    """ Check if we already have listed such a service in our
+                        collected list.
+                    """
                     for service in services:
                         if os.path.normpath(os.path.abspath(service["folder"]\
                                 )) == os.path.normpath(os.path.abspath(path)):
