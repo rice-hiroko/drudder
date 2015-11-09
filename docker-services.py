@@ -771,7 +771,8 @@ def btrfs_is_subvolume(path):
     for line in output:
         if not line.startswith("ID ") or line.find(" path ") < 0:
             raise RuntimeError("unexpected btrfs tool output - " + \
-                "maybe incompatible tool version? Please report this.")
+                "maybe incompatible tool version? Please report this." +\
+                " Full output: " + str(output))
         line = line[line.find(" path ")+len(" path "):].strip()
         full_path_guess = mount + line
         if not os.path.exists(full_path_guess):
