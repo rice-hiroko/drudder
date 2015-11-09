@@ -456,44 +456,47 @@ class LaunchThreaded(threading.Thread):
         self.path = service_dir
 
     def run(self):
-        perm_info = get_permission_info_from_yml(self.path, self.name)
-        if ("owner" in perm_info["livedata-permissions"]) \
-                and os.path.exists(os.path.join(self.path, "livedata")):
-            print_msg("ensuring file permissions of livedata folder...",\
-                service=self.name, color="blue")
-            owner = perm_info["livedata-permissions"]["owner"]
-            try:
-                owner = int(owner)
-            except TypeError:
-                # must be a name.
-                try:
-                    owner = getpwnam(owner).pw_uid
-                except KeyError:
-                    print_msg("invalid user specified for permissions: "+\
-                        "can't get uid for user: " + owner, color="red")
-                    raise RuntimeError("invalid user")
-            for root, dirs, files in os.walk(os.path.join(self.path, \
-                    "livedata")):
-                for f in (dirs + files):
-                    fpath = os.path.join(root, f)
-                    os.chown(fpath, owner, -1, follow_symlinks=False)
-
-        print_msg("launching...", service=self.name, color="blue")
         try:
-            subprocess.check_call([docker_compose_path(), "build"],
-                cwd=self.path)
-            subprocess.check_call([docker_compose_path(), "up", "-d"],
-                cwd=self.path)
-            time.sleep(1)
-            if not is_service_running(self.path, self.name):
-                print_msg("failed to launch. (nothing running after " +\
-                    "1 second)",\
+            perm_info = get_permission_info_from_yml(self.path, self.name)
+            if ("owner" in perm_info["livedata-permissions"]) \
+                    and os.path.exists(os.path.join(self.path, "livedata")):
+                print_msg("ensuring file permissions of livedata folder...",\
+                    service=self.name, color="blue")
+                owner = perm_info["livedata-permissions"]["owner"]
+                try:
+                    owner = int(owner)
+                except TypeError:
+                    # must be a name.
+                    try:
+                        owner = getpwnam(owner).pw_uid
+                    except KeyError:
+                        print_msg("invalid user specified for permissions: "+\
+                            "can't get uid for user: " + owner, color="red")
+                        raise RuntimeError("invalid user")
+                for root, dirs, files in os.walk(os.path.join(self.path, \
+                        "livedata")):
+                    for f in (dirs + files):
+                        fpath = os.path.join(root, f)
+                        os.chown(fpath, owner, -1, follow_symlinks=False)
+            print_msg("launching...", service=self.name, color="blue")
+            try:
+                subprocess.check_call([docker_compose_path(), "build"],
+                    cwd=self.path)
+                subprocess.check_call([docker_compose_path(), "up", "-d"],
+                    cwd=self.path)
+                time.sleep(1)
+                if not is_service_running(self.path, self.name):
+                    print_msg("failed to launch. (nothing running after " +\
+                        "1 second)",\
+                        service=self.name, color="red")
+                    return
+                print_msg("now running.", service=self.name, color="green")
+            except subprocess.CalledProcessError:
+                print_msg("failed to launch. (error exit code)",\
                     service=self.name, color="red")
-                return
-            print_msg("now running.", service=self.name, color="green")
-        except subprocess.CalledProcessError:
-            print_msg("failed to launch. (error exit code)",\
-                service=self.name, color="red")
+        except Exception as e:
+            print("UNEXPECTED ERROR", file=sys.stderr)
+            print("ERROR: " + str(e))
 
     @staticmethod
     def attempt_launch(directory, service, to_background_timeout=5):
