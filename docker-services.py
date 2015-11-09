@@ -945,7 +945,7 @@ def btrfs_tool_check():
             stderr=subprocess.STDOUT).decode("utf-8", "ignore")
     except subprocess.CalledProcessError as e:
         output = e.output.decode("utf-8", "ignore")
-    if not output.lower().startswith("btrfs-progrs ") and \ 
+    if not output.lower().startswith("btrfs-progrs ") and \
             not output.lower().startswith("btrfs-progs ") and \
             not output.lower().startswith("btrfs "):
         print_msg("error: btrfs tool returned unexpected string. Are " +\
