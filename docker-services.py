@@ -947,6 +947,7 @@ def btrfs_tool_check():
         print_msg("error: btrfs tool returned unexpected string. Are " +\
             "btrfs-progrs installed and working?",
             color="red")
+        print("Full btrfs output: " + str(output))
         sys.exit(1)
 
 def snapshot_subvolume_readiness_check(service_path, service_name):
