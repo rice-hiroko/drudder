@@ -861,6 +861,17 @@ def clean_up():
         if parts[4] == "" or parts[4].startswith("Exited "):
             print_msg("deleting stopped container " + parts[0] + "...")
             subprocess.check_output([docker_path(), "rm", parts[0]])
+    print_msg("cleaning up unneeded images...")
+    subprocess.check_output([docker_path(), "rmi",
+        "$(docker images -aq"], shell=True)
+    print_msg("cleaning up dangling volumes...")
+    dangling_vols = subprocess.check_output([docker_path(),
+        "volume", "ls", "-qf", "dangling=true"])
+    for vol in dangling_vols.splitlines():
+        vol = vol.strip()
+        if len(vol) == 0:
+            continue
+        subprocess.check_output([docker_path(), "volume", "rm", vol])
 
 parser = argparse.ArgumentParser(description=textwrap.dedent('''\
     Docker Services: a launch helper when you got more than one
