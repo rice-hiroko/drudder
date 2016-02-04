@@ -443,6 +443,7 @@ def get_service_dependencies(service_path, service_name):
                     })
     return dependent_services
 
+launch_completed = []
 launch_threads = []
 
 class LaunchThreaded(threading.Thread):
@@ -456,7 +457,9 @@ class LaunchThreaded(threading.Thread):
         self.path = service_dir
 
     def run(self):
+        global launch_completed
         try:
+            # Fix permissions if we have instructions for that:
             perm_info = get_permission_info_from_yml(self.path, self.name)
             if ("owner" in perm_info["livedata-permissions"]) \
                     and os.path.exists(os.path.join(self.path, "livedata")):
@@ -478,8 +481,26 @@ class LaunchThreaded(threading.Thread):
                     for f in (dirs + files):
                         fpath = os.path.join(root, f)
                         os.chown(fpath, owner, -1, follow_symlinks=False)
+
+            # Get dependencies and see if they have all been launched:
+            dependencies = get_service_dependencies(
+                self.path, self.name)
+            waiting_msg = False
+            for dependency in dependencies:
+                if not dependency in launch_completed:
+                    if not waiting_msg:
+                        waiting_msg = True
+                        print_msg("waiting for dependency to launch: " +\
+                            str(dependency), service=self.name,
+                            color="yellow")
+                    while (not dependency in launch_completed):
+                        time.sleep(1)
+
+            # Launch the service:
             print_msg("launching...", service=self.name, color="blue")
             try:
+                subprocess.check_call([docker_compose_path(), "rm", "-f"],
+                    cwd=self.path)
                 subprocess.check_call([docker_compose_path(), "build"],
                     cwd=self.path)
                 subprocess.check_call([docker_compose_path(), "up", "-d"],
@@ -490,8 +511,10 @@ class LaunchThreaded(threading.Thread):
                         "1 second)",\
                         service=self.name, color="red")
                     return
+                launch_completed.append({"folder":self.path, "name":self.name})
                 print_msg("now running.", service=self.name, color="green")
             except subprocess.CalledProcessError:
+                launch_completed.append({"folder":self.path, "name":self.name})
                 print_msg("failed to launch. (error exit code)",\
                     service=self.name, color="red")
         except Exception as e:
@@ -506,11 +529,15 @@ class LaunchThreaded(threading.Thread):
             still busy launching.
         """
         global launch_threads
+
+        # Start a new launch thread:
         launch_t = LaunchThreaded(directory, service)
         launch_t.start()
         
+        # Wait for it to complete:
         launch_t.join(to_background_timeout)
         if launch_t.isAlive():
+            # This took too long, run in background:
             print_msg("Maximum waiting time exceeded, " + \
                 "resuming launch in background.", service=service,
                 color="yellow")
@@ -569,7 +596,8 @@ def get_running_service_containers(service_path, service_name):
     running_containers = []
     try:
         output = subprocess.check_output([docker_compose_path(), "ps"],
-            cwd=service_path, stderr=subprocess.STDOUT).\
+            cwd=service_path, stderr=subprocess.STDOUT,
+            timeout=10).\
             decode("utf-8", "ignore")
     except subprocess.CalledProcessError as e:
         output = e.output.decode("utf-8", "ignore")
@@ -790,12 +818,10 @@ def btrfs_is_subvolume(path):
                     "-c", "%i", path]).decode('utf-8', 'ignore').strip()
             except subprocess.CalledProcessError as e:
                 # stat failed, although btrfs subvolume list lists it!
-                print("abc")
                 print_msg(nontrivial_error, color="red")
                 sys.exit(1)
             if output != "256":
                 # not a subvolume, although btrfs subvolume list lists it!
-                print('def: ' + output)
                 print_msg(nontrivial_error, color="red")
                 sys.exit(1)
             return True
@@ -806,7 +832,6 @@ def btrfs_is_subvolume(path):
         pass
     if output == "256":
         # stat says it's a subvolume, although we don't think it is!
-        print("ghi")
         print_msg(nontrivial_error, color="red")
         sys.exit(1)
     return False
@@ -1424,36 +1449,39 @@ elif args.action == "start" or args.action == "restart":
             "of the service to be started, or \"all\"", file=sys.stderr)
         sys.exit(1)
     specified_services = verify_service_names(args.argument)
-    restart_only_services = []
+    start_only_services = []
 
     # collect the required dependencies to launch services:
     dependencies_added = True
+    visited_deps = []
     while dependencies_added:
         dependencies_added = False
         deps = []
         for service in specified_services:
-            # we only care about things we're not restarting:
-            if not is_service_running(service['folder'],\
-                    service['name']):
-                # collect deps:
-                new_deps = get_service_dependencies(service["folder"],\
-                    service["name"])
-                deps += new_deps
+            # collect deps:
+            new_deps = get_service_dependencies(service["folder"],\
+                service["name"])
+            new_deps = [new_dep for new_dep in new_deps \
+                if new_dep not in visited_deps]
+            deps += new_deps
+            visited_deps += new_deps
         # see if all dependencies are in our list, if not then add to separate
         # start-only list:
         for dep in deps:
             if not (dep in specified_services) and \
-                    not (dep in restart_only_services):
-                restart_only_services = [dep] + restart_only_services
+                    not (dep in start_only_services):
+                start_only_services = [dep] + start_only_services
                 dependencies_added = True
 
-    all_services = restart_only_services + specified_services
+    all_services = start_only_services + specified_services
     i = 0
     while i < len(all_services):
         service = all_services[i]
         if is_service_running(service['folder'], service['name']):
             # restart if requested:
-            if args.action == "start" or (service in restart_only_services):
+            if args.action == "start" or (service in start_only_services):
+                launch_completed += [{"folder":service["folder"],
+                    "name":service["name"]}]
                 print_msg("already running.", service=service['name'],\
                     color="green")
                 i += 1 
