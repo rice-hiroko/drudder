@@ -20,7 +20,7 @@ need a nice way to launch and manage all of these services in one go!
 
 - one self-contained file
 
-
+**This script is an alpha status. Expect some bugs and problems.**
 
 # Basic usage
 
@@ -96,8 +96,9 @@ This feature allows you to easily copy all the live data of your read-write
 mounted volumes your containers as atomic snapshots even while your
 services are running and continue to write data.
 
-The snapshots will be atomic, therefore suitable even for database realtime
-operations while the database is running and writing to the volume(s).
+The snapshots will be atomic, therefore they should be suitable even for
+database realtime operations while the database is running and writing to
+the volume(s).
 
 ## Enable it for a service
 
