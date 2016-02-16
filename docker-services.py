@@ -487,6 +487,8 @@ class ServiceContainer(object):
         self.name = container_name
 
     def __eq__(self, other):
+        if other is None:
+            return False
         if not hasattr(other, "service_name") or not hasattr(other,
                 "service_path") or not hasattr(other, "name"):
             return False
@@ -1069,6 +1071,12 @@ class FailedLaunchTracker(object):
         self.access_lock = threading.Lock()
         self.contents = set()
 
+    def __len__(self):
+        self.access_lock.acquire()
+        result = len(self.contents)
+        self.access_lock.release()
+        return result
+
     def __contains__(self, item):
         self.access_lock.acquire()
         result = (item in self.contents)
@@ -1185,7 +1193,8 @@ class LaunchThreaded(threading.Thread):
         """
 
         # Start a new launch thread:
-        launch_t = LaunchThreaded(container, failed_launch_tracker=failed_launch_tracker)
+        launch_t = LaunchThreaded(container,
+            failed_launch_tracker=failed_launch_tracker)
         launch_t.start()
         
         # Wait for it to complete:
@@ -1432,7 +1441,7 @@ class Snapshots(object):
         # Everything seems fine so far.
         return
 
-    def snapshot(self):
+    def do(self):
         """ Make a backup of the live data of the service. """
 
         self.btrfs_tool_check()
@@ -1753,6 +1762,30 @@ class TargetsParser(object):
                 result.add(container)
         return list(result)
 
+    @staticmethod
+    def get_services(self, print_error=False):
+        while targets.find("  ") >= 0:
+            targets.replace("  ", " ")
+        result = set()
+        targets = targets.strip()
+
+        # Go through all targets in the list:
+        for target in targets.split(" "):
+            # Specific treatment of the "all" keyword:
+            if target == "all":
+                for service in Service.all():
+                    result.add(service)
+                return list(result)
+            service = Service.find_by_name(service_name)
+            if service == None:
+                if print_error:
+                    print("docker-services.py: error: " + \
+                        "no such service found: " + str(service_name),
+                        file=sys.stderr)
+                return None
+            result.add(service)
+        return list(result)
+
 def unknown_action(hint=None):
     """ Print an error that the given action to docker-services.py is invalid,
         with a possible hint to suggest another action.
@@ -1810,7 +1843,8 @@ elif args.action == "logs":
             "of the service for which docker logs shold be printed, "+\
             "or \"all\"", file=sys.stderr)
         sys.exit(1)
-    containers = TargetsParser.get_containers(" ".join(args.argument))
+    containers = TargetsParser.get_containers(" ".join(args.argument),
+        print_msg=True)
     for container in containers:
         print_msg("printing log of container " + str(container),
             service=container.service.name, color='blue')
@@ -1860,93 +1894,130 @@ elif args.action == "start" or args.action == "restart":
         print("docker-services.py: error: please specify the name " + \
             "of the service to be started, or \"all\"", file=sys.stderr)
         sys.exit(1)
-    specified_services = verify_service_names(args.argument)
-    start_only_services = []
+    containers = TargetsParser.get_containers(" ".join(args.argument),
+        print_error=True)
+    
+    # This will hold all the containers that need to be (re)started including
+    # the dependencies they need themselves:
+    stop_containers = list()
+    if args.action == "restart":
+        stop_containers = copy.copy(containers)
+    start_containers = copy.copy(containers)
 
-    # collect the required dependencies to launch services:
-    dependencies_added = True
-    visited_deps = []
-    while dependencies_added:
-        dependencies_added = False
-        deps = []
-        for service in specified_services:
-            # collect deps:
-            new_deps = get_service_dependencies(service["folder"],\
-                service["name"])
-            new_deps = [new_dep for new_dep in new_deps \
-                if new_dep not in visited_deps]
-            deps += new_deps
-            visited_deps += new_deps
-        # see if all dependencies are in our list, if not then add to separate
-        # start-only list:
-        for dep in deps:
-            if not (dep in specified_services) and \
-                    not (dep in start_only_services):
-                start_only_services = [dep] + start_only_services
-                dependencies_added = True
+    # This will hold all the containers depending on the restarted ones that
+    # also need to be restarted as a consequence:
+    restart_dependant_containers = list()
+    
+    # Collect dependencies of the containers to be (re)started to ensure they
+    # will be started too:
+    list_changed = True
+    while list_changed:
+        list_changed = False
+        for container in containers:
+            deps = []
+            for dep in container.dependencies:
+                try:
+                    deps.append(dep.container)
+                except ValueError:
+                    print("docker-services.py: error: dependency for " +\
+                        str(container) + " is not in known services, " +\
+                        "can't resolve dependency chain: " +\
+                        str(dep), file=sys.stderr)
+                    sys.exit(1)
+                if not dep in start_containers:
+                    start_containers.append(dep)
+                    list_changed = True
 
-    all_services = start_only_services + specified_services
-    i = 0
-    while i < len(all_services):
-        service = all_services[i]
-        if is_service_running(service['folder'], service['name']):
-            # restart if requested:
-            if args.action == "start" or (service in start_only_services):
-                launch_completed += [{"folder":service["folder"],
-                    "name":service["name"]}]
-                print_msg("already running.", service=service['name'],\
-                    color="green")
-                i += 1 
-                continue
-            print_msg("stopping...", service=service['name'],
-                color="blue")
-            LaunchThreaded.stop(service["folder"], service['name']) 
-        if i < len(specified_services) - 1:
-            # not the last service, allow it to go to background:
-            LaunchThreaded.attempt_launch(service['folder'], service['name'])
-        else:
-            # last service, handle this one blocking:
-            LaunchThreaded.attempt_launch(service['folder'], service['name'],\
-                to_background_timeout=None)
-        i += 1
+    # Collect services depending on the containers that are restarted in the
+    # process, so they can be restarted too:
+    list_changed = True
+    while list_changed:
+        list_changed = True
+        for service in Service.all():
+            for container in service.containers:
+                for stopped_container in (stop_containers +\
+                        restart_dependant_containers):
+                    for dep in container.dependencies:
+                        dep_container = None
+                        try:
+                            dep_container = dep.container
+                        except ValueError:
+                            pass
+                        if dep_container == stopped_container and \
+                                not container in stop_containers:
+                            restart_dependant_containers.append(container)
+
+    tracker = FailedLaunchTracker()
+        
+    # Handle actual (re)starts: 
+    for container in stop_containers:
+         print_msg("stopping... (for scheduled restart)",
+            service=container.service.name, container=container.name,
+            color="blue")
+        LaunchThreaded.stop(container)
+    for container in restart_dependant_containers:
+         print_msg("stopping... (container depending on 1+ " +\
+            "restarted container(s))",
+            service=container.service.name, container=container.name,
+            color="blue")
+        LaunchThreaded.stop(container)
+    for container in start_containers + restart_dependant_containers:
+        if container.running:
+            print_msg("already running.", service=container.service.name,\
+                container=container.name,
+                color="green")
+        LaunchThreaded.attempt_launch(container,
+            failed_launch_tracker=tracker)
     LaunchThreaded.wait_for_launches()
+    if len(tracker) > 0:
+        print("docker-services.py: error: some launches failed.",
+            file=sys.stderr)
+        sys.exit(1)
+    else:
+        sys.exit(0)
 elif args.action == "stop":
     if len(args.argument) == 0:
         print("docker-services.py: error: please specify the name " + \
             "of the service to be stopped, or \"all\"", file=sys.stderr)
         sys.exit(1)
-    specified_services = verify_service_names(args.argument)
-    i = 0
-    while i < len(specified_services):
-        service = specified_services[i]
-        if is_service_running(service['folder'], service['name']):
-            print_msg("stopping...", service=service['name'],
+    containers = TargetsParser.get_containers(" ".join(args.argument),
+        print_error=True)
+    for container in containers:
+        if container.running:
+            print_msg("stopping...", service=container.service.name,
+                container=container.name,
                 color="blue")
-            LaunchThreaded.stop(service["folder"], service['name'])
-            print_msg("stopped.", service=service['name'], color="green")
-            i += 1
-            continue
-        print_msg("not currently running.", service=service['name'],
-            color="blue")
-        i += 1
+            LaunchThreaded.stop(container)
+            print_msg("stopped.", service=container.service.name,
+                container=container.name, color="green")
+        else:
+            print_msg("not currently running.",
+                service=container.service.name,
+                container=container.name,
+                color="blue")
+    sys.exit(0)
 elif args.action == "snapshot":
     if len(args.argument) == 0:
         print("docker-services.py: error: please specify the name " + \
-            "of the service to be stopped, or \"all\"", file=sys.stderr)
+            "of the service to be snapshotted, or \"all\"", file=sys.stderr)
         sys.exit(1)
-    specified_services = verify_service_names(args.argument)
+    services = TargetsParser.get_services(" ".join(args.argument),
+        print_error=True)
     return_error = False
-    for service in specified_services:
-        fs = SystemInfo.filesystem_type_at_path(service["folder"])
+    for service in services:
+        fs = SystemInfo.filesystem_type_at_path(service.service_path)
         if fs != "btrfs":
             print_msg("cannot snapshot service. filesystem " +\
                 "is " + fs + ", would need to be btrfs",
-                service=service["name"], color="red")
+                service=service.name, color="red")
             return_error = True
             continue
-        if not snapshot(service["folder"], service["name"]):
+        snapshots = Snapshots(service)
+        if not snapshots.do():
             return_error = True
     if return_error:
+        print("docker-services.py: error: some snapshots failed.",
+            file=sys.stderr)
         sys.exit(1)
     else:
         sys.exit(0)
