@@ -1989,6 +1989,8 @@ elif args.action == "logs":
         sys.exit(1)
     containers = TargetsParser.get_containers(" ".join(args.argument),
         print_error=True)
+    if containers == None:
+        sys.exit(1)
     for container in containers:
         print_msg("printing log of container " + str(container),
             service=container.service.name, color='blue')
@@ -2013,6 +2015,8 @@ elif args.action == "shell":
         sys.exit(1)
     containers = TargetsParser.get_containers(" ".join(args.argument),
         print_error=True)
+    if containers == None:
+        sys.exit(1)
     if len(containers) != 1:
         print("docker-services.py: error: this command can only be used " + \
             "on a single container/service. It matches " + str(containers) +\
