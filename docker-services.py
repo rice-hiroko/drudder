@@ -168,6 +168,7 @@ import sys
 import textwrap
 import threading
 import time
+import traceback
 import uuid
 yaml_available = False
 try:
@@ -468,7 +469,7 @@ class ServiceDependency(object):
             raise ValueError("the service that provides this dependency " +\
                 "isn't known")
         return ServiceContainer(self.service_name, self.service_path,
-            self.conainer_name)
+            self.container_name)
 
     def __repr__(self):
         if self.service_name != None:
@@ -487,6 +488,14 @@ class ServiceContainer(object):
         self.service_path = service_path
         self.name = container_name
         self._known_image_name = image_name
+
+    def __repr__(self):
+        return self.service_name + "/" + self.name
+
+    def __hash__(self):
+        return hash(self.service_name + \
+            os.path.normpath(os.path.abspath(self.service_path)) + \
+            self.name)
 
     def __eq__(self, other):
         if other is None:
@@ -539,7 +548,7 @@ class ServiceContainer(object):
     def default_container_name(self):
         fpath = os.path.normpath(os.path.abspath(self.service_path))
         return (os.path.basename(fpath).replace("-", "")
-            + "_" + str(self.container_name) + "_1")
+            + "_" + str(self.name) + "_1")
 
     @property
     def image_name(self):
@@ -732,8 +741,11 @@ class ServiceContainer(object):
 
     @property
     def dependencies(self):
-        # Collect all external_links container references:
-        external_links = self.service._external_docker_compose_links
+        # Collect all external_links and links container references:
+        external_links = self.service._external_docker_compose_links(
+            self.name)
+        internal_links = self.service._internal_docker_compose_links(
+            self.name)
         dependencies = []
 
         # Go through all external links
@@ -741,19 +753,20 @@ class ServiceContainer(object):
             link_name = link.partition(":")[0]
             target_found = False
             # See if we can find the target service:
-            for service in Service.get_global_service_list():
+            for service in Service.all():
                 for container in service.containers:
                     if (service == self.service and 
                             link_name == container.name) or \
                             link_name == container.default_container_name:
                         target_found = True
                         dependencies.append(ServiceDependency(
-                            self.service_name, self.service_path,
+                            service.name, service.service_path,
                             container.name))
             if not target_found:
                 dependencies.append(ServiceDependency(
                     None, None, link_name))
 
+        # Go through all internal links:
         for link in internal_links:
             link_name = link.partition(":")[0]
             target_found = False
@@ -767,7 +780,7 @@ class ServiceContainer(object):
             if not target_found:
                 dependencies.append(ServiceDependency(
                     None, None, link_name))
-        return dependent_services
+        return dependencies
 
 class Service(object):
     """ This class holds all the info and helper functionality for managing
@@ -791,6 +804,10 @@ class Service(object):
 
     def __neq__(self, other):
         return not self.__eq__(other)
+
+    def __hash__(self):
+        return hash(self.name + "/" + os.path.normpath(
+            os.path.abspath(self.service_path)))
 
     def is_running(self):
         return len(self._get_running_service_container_names()) > 0
@@ -885,7 +902,72 @@ class Service(object):
         return [self._fix_container_name(container) \
             for container in running_containers]
 
-    @property
+    def _internal_docker_compose_links(self, container_name):
+        """ Attempt to parse and return all containers referenced as external
+            links used by a service from the respective docker-compose.yml of
+            that service.
+        """
+        links = []
+        with open(os.path.join(self.service_path,
+                "docker-compose.yml"), "rb") as f:
+            contents = f.read().decode("utf-8", "ignore").\
+                replace("\r\n", "\n").\
+                replace("\r", "\n")
+        try:
+            parsed_obj = yaml.safe_load(contents)
+            if not container_name in parsed_obj:
+                raise ValueError("no such container found: " +\
+                    str(container_name))
+            if not "links" in parsed_obj[container_name]:
+                return []
+            return [entry.partition(":")[0] for entry in \
+                parsed_obj[container_name]["links"]]
+        except NameError:
+            # Continue with the YAML parsing hack:
+            pass
+        in_relevant_container_section = False
+        in_links_list = False
+        for line in contents.split("\n"):
+            if line.strip() == "":
+                continue
+
+            # Figure out whether we are entering/leaving the relevant container
+            # section:
+            if line.startswith(container_name + ":"):
+                in_relevant_container_section = True
+            elif not line.startswith(" ") and \
+                    not line.startswith("\t") and \
+                    line.endswith(":"):
+                in_relevant_container_section = False
+
+            # Detect external_links: subsection:
+            if line.startswith(" ") and (line.strip().\
+                    startswith("links ")
+                    or line.strip().startswith("links:")):
+                in_links_list = True
+
+                # Parse remaining stuff in line:
+                i = line.find("links")
+                line = line[i+len("links"):].strip()
+                if line.startswith(":"):
+                    line = line[1:].strip()
+                if len(line) == 0:
+                    continue
+
+            # Parse entries:
+            if in_links_list:
+                if not line.strip().startswith("-"):
+                    in_links_list = False
+                    continue
+                line = line[line.find("-")+1:].strip()
+                if line.startswith("\"") and line.endswith("\""):
+                    line = line[1:-1].strip()
+                parts = line.split(":")
+                if in_relevant_container_section:
+                    links.append(parts[0])
+        return links
+
+
     def _external_docker_compose_links(self, container_name):
         """ Attempt to parse and return all containers referenced as external
             links used by a service from the respective docker-compose.yml of
@@ -902,7 +984,10 @@ class Service(object):
             if not container_name in parsed_obj:
                 raise ValueError("no such container found: " +\
                     str(container_name))
-                
+            if not "external_links" in parsed_obj[container_name]:
+                return []
+            return [entry.partition(":")[0] for entry in \
+                parsed_obj[container_name]["external_links"]]
         except NameError:
             # Continue with the YAML parsing hack:
             pass
@@ -1022,8 +1107,38 @@ class Service(object):
                 "docker-compose.yml"), "rb") as f:
             contents = f.read().decode("utf-8", "ignore").\
                 replace("\r\n", "\n").\
-                replace("\r", "\n").replace("\t", " ").split("\n")
+                replace("\r", "\n").replace("\t", " ")
+
+        # See if YAML parsing works (depending on pyyaml being installed):
+        parsed_obj = None
+        try:
+            parsed_obj = yaml.safe_load(contents)
+        except NameError:
+            pass
+
         results = []
+
+        # Assemble results if YAML parsing worked:
+        if parsed_obj != None:
+            for container_name in parsed_obj:
+                for property_name in parsed_obj[container_name]:
+                    value = parsed_obj[container_name][property_name]
+                    if property_name == "image":
+                        # This container is constructed from an image:
+                        image_name = value
+
+                        # This is the resulting container name:
+                        results.append(ServiceContainer(
+                            self.name, self.service_path,
+                            container_name,
+                            image_name=image_name))
+                    elif property_name == "build":
+                        results.append(ServiceContainer(
+                            self.name, self.service_path,
+                            container_name))
+            return results
+
+        # Parse with our hacky YAML pseudo-parsing:
         smallest_observed_indentation = 999
         def count_indentation(line):
             i = 0
@@ -1032,7 +1147,8 @@ class Service(object):
             return i
         current_container_name = None
         i = 0
-        for line in contents:
+        for line in contents.split("\n"):
+            print("LINE: " + str(line))
             next_line = None
             i += 1
             if i < len(contents):
@@ -1042,14 +1158,15 @@ class Service(object):
                 # This is the container name:
                 current_container_name = line.partition(":")[0].strip().\
                     partition(" ")[0]
-            elif count_indentation(line) < smallest_observed_indentation:
+            elif count_indentation(line) <= smallest_observed_indentation:
                 # This is a line inside the service declaration.
                 keyword = line.partition(":")[0].strip().partition(" ")[0]
                 value = line.partition(":")[2].strip()
                 if len(value) == 0:
                     value = next_line.strip()
                 if keyword == "build":
-                    # This service build from a directory. get name of directory:
+                    # This service build from a directory.
+                    # Get the name of the directory:
                     build_path = os.path.normpath(\
                         os.path.join(service_path, value))
                     while build_path.endswith("/"):
@@ -1069,7 +1186,7 @@ class Service(object):
                         self.name, self.service_path,
                         current_container_name,
                         image_name=image_name))
-            return results
+        return results
 
 class FailedLaunchTracker(object):
     def __init__(self):
@@ -1103,6 +1220,7 @@ class LaunchThreaded(threading.Thread):
         super().__init__()
         self.container = container
         self.failed_launch_tracker = None
+        self.path = self.container.service.service_path
 
     def run(self):
         try:
@@ -1110,7 +1228,8 @@ class LaunchThreaded(threading.Thread):
             perms = Permissions(self.container.service)
             perm_info = perms.get_permission_info_from_yml()
             if ("owner" in perm_info["livedata-permissions"]) \
-                    and os.path.exists(os.path.join(self.path, "livedata")):
+                    and os.path.exists(os.path.join(
+                        self.path, "livedata")):
                 print_msg("ensuring file permissions of livedata folder...",\
                     service=self.container.service.name,
                     container=self.container.name,
@@ -1187,6 +1306,7 @@ class LaunchThreaded(threading.Thread):
         except Exception as e:
             print("UNEXPECTED ERROR", file=sys.stderr)
             print("ERROR: " + str(e))
+            traceback.print_exc()
 
     @staticmethod
     def attempt_launch(container, to_background_timeout=5,
@@ -1583,16 +1703,19 @@ class Snapshots(object):
         # Make sure the btrfs snapshot path is unused:
         if os.path.exists(snapshot_dir):
             if SystemInfo._btrfs_subvolume_stat_check(snapshot_dir):
-                print_msg("warning: .btrfs-livedata-snapshot/ already present! " \
+                print_msg("warning: .btrfs-livedata-snapshot/ " \
+                    + "already present! " \
                     + "This is probably a leftover from a previously " + \
                     "aborted attempt. Will now attempt to delete it...",
                     service=self.service.name, color="yellow")
-                subprocess.check_output([SystemInfo.btrfs_path(), "subvolume",
+                subprocess.check_output([SystemInfo.btrfs_path(),
+                    "subvolume",
                     "delete", snapshot_dir])
                 assert(not os.path.exists(snapshot_dir))
             else:
-                print_msg("error: .btrfs-livedata-snapshot/ already present, " \
-                    + "but it is not a btrfs snapshot!! I don't know how " + \
+                print_msg("error: .btrfs-livedata-snapshot/ already " +\
+                    "present, " \
+                    + "but it is not a btrfs snapshot!! I don't know how " +\
                     "to deal with this, aborting.",
                     service=self.service.name, color="red")
                 return False
@@ -1604,7 +1727,8 @@ class Snapshots(object):
                 + "This is probably a leftover from a previously " + \
                 "aborted attempt. Will now attempt to delete it...",
                 service=self.service.name, color="yellow")
-            output = subprocess.check_output([SystemInfo.btrfs_path(), "subvolume",
+            output = subprocess.check_output([SystemInfo.btrfs_path(),
+                "subvolume",
                 "delete", tempvolume_dir])
             assert(not os.path.exists(tempvolume_dir))
 
@@ -1932,20 +2056,22 @@ elif args.action == "start" or args.action == "restart":
     # will be started too:
     list_changed = True
     while list_changed:
+        print("Current start_containers list: " + str(start_containers))
         list_changed = False
         for container in containers:
-            deps = []
+            print("Examining container: " + str(container))
             for dep in container.dependencies:
+                dep_container = None
                 try:
-                    deps.append(dep.container)
+                    dep_container = dep.container
                 except ValueError:
                     print("docker-services.py: error: dependency for " +\
                         str(container) + " is not in known services, " +\
                         "can't resolve dependency chain: " +\
                         str(dep), file=sys.stderr)
                     sys.exit(1)
-                if not dep in start_containers:
-                    start_containers.append(dep)
+                if not dep_container in start_containers:
+                    start_containers.append(dep_container)
                     list_changed = True
 
     # Collect services depending on the containers that are restarted in the
