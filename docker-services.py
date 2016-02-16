@@ -481,10 +481,12 @@ class ServiceContainer(object):
         or the directory for the respective docker-compose.yml where
         docker-compose commands can be run.
     """
-    def __init__(self, service_name, service_path, container_name):
+    def __init__(self, service_name, service_path, container_name,
+            image_name=None):
         self.service_name = service_name
         self.service_path = service_path
         self.name = container_name
+        self._known_image_name = image_name
 
     def __eq__(self, other):
         if other is None:
@@ -541,7 +543,9 @@ class ServiceContainer(object):
 
     @property
     def image_name(self):
-        raise RuntimeError("check build/image instruction in dc.yml")
+        if self._known_image_name != None:
+            return self._known_image_name
+        return self.default_container_name
 
     @property
     def current_running_instance_name(self):
@@ -1063,7 +1067,8 @@ class Service(object):
                     # This is the resulting container name:
                     results.append(ServiceContainer(
                         self.name, self.service_path,
-                        current_container_name))
+                        current_container_name,
+                        image_name=image_name))
             return results
 
 class FailedLaunchTracker(object):
