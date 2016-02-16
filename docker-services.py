@@ -177,9 +177,6 @@ except ImportError:
         "Please install pyyaml to use proper parsing.", file=sys.stderr)
     pass
 
-# our list of known services:
-services = []
-
 class DoubleLineBreakFormatter(HelpFormatter):
     """ Retains double line breaks/paragraphs """
     def _split_lines(self, text, width):
@@ -240,7 +237,7 @@ class SystemInfo(object):
         test_names = [ "docker.io", "docker" ]
 
         for test_name in test_names:
-            bin_path = locate_binary(test_name)
+            bin_path = SystemInfo.locate_binary(test_name)
             if bin_path == None:
                 continue
             if behaves_like_docker(bin_path):
@@ -306,7 +303,7 @@ class SystemInfo(object):
         """ Locate docker-compose binary and return its path, or exit process with
             error if not available.
         """
-        bin_path = locate_binary("docker-compose")
+        bin_path = SystemInfo.locate_binary("docker-compose")
         if bin_path != None:
             return bin_path
         print("docker-services.py: error: no docker-compose found. " + \
@@ -359,7 +356,8 @@ class SystemInfo(object):
         """
         if not os.path.exists(path):
             raise ValueError("given path does not exist: " + str(path))
-        output = subprocess.check_output([locate_binary("df"), path]).\
+        output = subprocess.check_output([
+            SystemInfo.locate_binary("df"), path]).\
             decode("utf-8", "ignore")
 
         # Skip first line:
@@ -381,7 +379,8 @@ class SystemInfo(object):
                 return None
             return filesystem_type_at_path(os.path.normpath(path + "/../"))
 
-        output = subprocess.check_output([locate_binary("mount")]).\
+        output = subprocess.check_output([
+            SystemInfo.locate_binary("mount")]).\
             decode("utf-8", "ignore")
         for line in output.split("\n"):
             if not line.startswith(device_of_path + " "):
@@ -496,8 +495,8 @@ class ServiceContainer(object):
             return False
         if other.service_name != self.service_name:
             return False
-        if os.path.normpath(os.path.abspath(self.service_path)) !=
-                os.path.normpath(os.path.abspath(other.service_path)):
+        if (os.path.normpath(os.path.abspath(self.service_path)) !=
+                os.path.normpath(os.path.abspath(other.service_path))):
             return False
         if other.name != self.name:
             return False
@@ -538,7 +537,7 @@ class ServiceContainer(object):
     @property
     def default_container_name(self):
         fpath = os.path.normpath(os.path.abspath(self.service_path))
-        return os.path.basename(fpath).replace("-", "") \
+        return (os.path.basename(fpath).replace("-", "")
             + "_" + str(self.container_name) + "_1")
 
     @property
@@ -604,7 +603,7 @@ class ServiceContainer(object):
 
         try:
             return [(volume, self._map_host_dir_to_container_volume_dir(
-                volume) for volume in self._get_active_volumes()]
+                volume)) for volume in self._get_active_volumes()]
         except ValueError:
             return []
 
@@ -619,7 +618,7 @@ class ServiceContainer(object):
         """
         try:
             return [(volume, self._map_host_dir_to_container_volume_dir(
-                volume) for volume in self._get_active_volumes(rw_only=True)]
+                volume)) for volume in self._get_active_volumes(rw_only=True)]
         except ValueError:
             return []
 
@@ -743,8 +742,8 @@ class ServiceContainer(object):
             # See if we can find the target service:
             for service in Service.get_global_service_list():
                 for container in service.containers:
-                    if (service == self.service and \
-                            link_name == container.name) or
+                    if (service == self.service and 
+                            link_name == container.name) or \
                             link_name == container.default_container_name:
                         target_found = True
                         dependencies.append(ServiceDependency(
@@ -803,7 +802,7 @@ class Service(object):
         return None
 
     @staticmethod
-    def all(self):
+    def all():
         """ Get a global list of all detected services.
         """
         services = []
@@ -1809,11 +1808,18 @@ try:
 except subprocess.CalledProcessError as e:
     error_output = e.output.decode("utf-8", "ignore")
 if error_output != None:
+    # Old-style error message:
     if error_output.find("dial unix") >= 0 and \
             error_output.find("no such file or directory") >= 0:
         print("docker-services.py: error: " + \
             "docker daemon appears to be not running." +\
-            " Please start it.")
+            " Please start it and ensure it is reachable.")
+        sys.exit(1)
+    # Newer error message:
+    elif error_output.find("Cannot connect to the Docker daemon") >= 0:
+        print("docker-services.py: error: " + \
+            "docker daemon appears to be not running." +\
+            " Please start it and ensure it is reachable.")
         sys.exit(1)
     else:
         print("docker-services.py: error: " + \
@@ -1821,17 +1827,18 @@ if error_output != None:
             "docker! (test run of \"docker ps\" returned error code)")
         sys.exit(1)
 
-# check if services are btrfs ready:
+# Check if services are btrfs ready, and give warning if not:
 if args.action != "snapshot":
-    for service in Services.all():
+    for service in Service.all():
         snapshots = Snapshots(service)
         snapshots.subvolume_readiness_check()
 
 # --- Main handling of actions here:
 
 if args.action == "list" or args.action == "ps" or args.action == "status":
-    print("Service list (" + str(len(services)) + " service(s)):")
-    for service in Services.all():
+    all_services = Service.all()
+    print("Service list (" + str(len(all_services)) + " service(s)):")
+    for service in all_services:
         state = ""
         if service.is_running():
             state = "\033[1;32mrunning\033[0m"
@@ -1958,12 +1965,12 @@ elif args.action == "start" or args.action == "restart":
         
     # Handle actual (re)starts: 
     for container in stop_containers:
-         print_msg("stopping... (for scheduled restart)",
+        print_msg("stopping... (for scheduled restart)",
             service=container.service.name, container=container.name,
             color="blue")
         LaunchThreaded.stop(container)
     for container in restart_dependant_containers:
-         print_msg("stopping... (container depending on 1+ " +\
+        print_msg("stopping... (container depending on 1+ " +\
             "restarted container(s))",
             service=container.service.name, container=container.name,
             color="blue")
