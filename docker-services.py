@@ -1892,6 +1892,8 @@ elif args.action == "shell":
             service=containers[0].service.name,
             color="blue")
         image_name = containers[0].image_name
+        subprocess.call([SystemInfo.docker_compose_path(), "build",
+            containers[0].name], cwd=containers[0].service.service_path)
         subprocess.call([SystemInfo.docker_compose_path(), "run",
             image_name, "/bin/bash"], cwd=containers[0].service.service_path)
 elif args.action == "start" or args.action == "restart":
