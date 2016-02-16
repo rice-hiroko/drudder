@@ -157,6 +157,7 @@ freely, subject to the following restrictions:
 
 import argparse
 from argparse import RawTextHelpFormatter, HelpFormatter
+import copy
 import datetime
 import json
 import os
@@ -432,7 +433,7 @@ def print_msg(text, service=None, container=None, color="blue"):
     initial_length = len("[docker-services.py")
     if service != None:
         initial_length = len("[" + service)
-        if containear != None:
+        if container != None:
             initial_length += len("/" + container)
     initial_length += len("] ") 
 
@@ -795,7 +796,7 @@ class Service(object):
         return len(self._get_running_service_container_names()) > 0
 
     @staticmethod
-    def find_by_name(self, name):
+    def find_by_name(name):
         for service in Service.all():
             if service.name == name:
                 return service
@@ -1210,7 +1211,8 @@ class LaunchThreaded(threading.Thread):
                 service=container.service.name,
                 container=container.name,
                 color="yellow")
-            launch_threads.append(launch_t)
+            return launch_t
+        return None
 
     @staticmethod
     def stop(container):
@@ -1218,9 +1220,8 @@ class LaunchThreaded(threading.Thread):
         container.stop()
 
     @staticmethod
-    def wait_for_launches():
-        global launch_threads
-        for launch_t in launch_threads:
+    def wait_for_launches(threads):
+        for launch_t in threads:
             if launch_t.isAlive():
                 launch_t.join()
 
@@ -1746,6 +1747,9 @@ class TargetsParser(object):
             container_name = target.partition("/")[2]
             if len(container_name) == 0: # all containers:
                 containers = service.containers
+                if len(containers) == 0:
+                    print_msg("warning: specified service has no " +\
+                        "containers", color="yellow", service=service.name)
             else: # a specific container. find it by name:
                 containers = []
                 for service_container in service.containers:
@@ -1910,7 +1914,9 @@ elif args.action == "start" or args.action == "restart":
         sys.exit(1)
     containers = TargetsParser.get_containers(" ".join(args.argument),
         print_error=True)
-    
+    if len(containers) == 0:
+        sys.exit(0)
+
     # This will hold all the containers that need to be (re)started including
     # the dependencies they need themselves:
     stop_containers = list()
@@ -1946,7 +1952,7 @@ elif args.action == "start" or args.action == "restart":
     # process, so they can be restarted too:
     list_changed = True
     while list_changed:
-        list_changed = True
+        list_changed = False
         for service in Service.all():
             for container in service.containers:
                 for stopped_container in (stop_containers +\
@@ -1959,11 +1965,19 @@ elif args.action == "start" or args.action == "restart":
                             pass
                         if dep_container == stopped_container and \
                                 not container in stop_containers:
-                            restart_dependant_containers.append(container)
+                            if not container in restart_dependant_containers:
+                                list_changed = True
+                                restart_dependant_containers.append(container)
 
     tracker = FailedLaunchTracker()
-        
-    # Handle actual (re)starts: 
+
+    #print("stop_containers: " + str(stop_containers))
+    #print("restart_dependant_containers: " + str(
+    #    restart_dependant_containers))
+    #print("start_containers: " + str(start_containers))
+
+    # Handle actual (re)starts:
+    threads = list()
     for container in stop_containers:
         print_msg("stopping... (for scheduled restart)",
             service=container.service.name, container=container.name,
@@ -1980,9 +1994,11 @@ elif args.action == "start" or args.action == "restart":
             print_msg("already running.", service=container.service.name,\
                 container=container.name,
                 color="green")
-        LaunchThreaded.attempt_launch(container,
+        t = LaunchThreaded.attempt_launch(container,
             failed_launch_tracker=tracker)
-    LaunchThreaded.wait_for_launches()
+        if t != None:
+            threads.append(t)
+    LaunchThreaded.wait_for_launches(threads)
     if len(tracker) > 0:
         print("docker-services.py: error: some launches failed.",
             file=sys.stderr)
