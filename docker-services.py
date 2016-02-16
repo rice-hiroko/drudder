@@ -2049,6 +2049,8 @@ elif args.action == "start" or args.action == "restart":
         sys.exit(1)
     containers = TargetsParser.get_containers(" ".join(args.argument),
         print_error=True)
+    if containers == None:
+        sys.exit(1)
     if len(containers) == 0:
         sys.exit(0)
 
@@ -2080,7 +2082,7 @@ elif args.action == "start" or args.action == "restart":
                         str(dep), file=sys.stderr)
                     sys.exit(1)
                 if not dep_container in start_containers:
-                    start_containers.append(dep_container)
+                    start_containers.prepend(dep_container)
                     list_changed = True
 
     # Collect services depending on the containers that are restarted in the
@@ -2106,33 +2108,41 @@ elif args.action == "start" or args.action == "restart":
 
     tracker = FailedLaunchTracker()
 
-    #print("stop_containers: " + str(stop_containers))
-    #print("restart_dependant_containers: " + str(
-    #    restart_dependant_containers))
-    #print("start_containers: " + str(start_containers))
+    # Stop all indirect dependencies on the now stopped containers:
+    for container in reversed(restart_dependant_containers):
+        print_msg("stopping... (container depending on 1+ " +\
+            "restarted container(s))",
+            service=container.service.name, container=container.name,
+            color="blue")
+        LaunchThreaded.stop(container)
 
-    # Handle actual (re)starts:
+    # Stop all regularly stopped containers:
     threads = list()
     for container in stop_containers:
         print_msg("stopping... (for scheduled restart)",
             service=container.service.name, container=container.name,
             color="blue")
         LaunchThreaded.stop(container)
-    for container in restart_dependant_containers:
-        print_msg("stopping... (container depending on 1+ " +\
-            "restarted container(s))",
-            service=container.service.name, container=container.name,
-            color="blue")
-        LaunchThreaded.stop(container)
-    for container in start_containers + restart_dependant_containers:
+
+    # Start everything again:
+    start_all = start_containers + restart_dependant_containers
+    i = 0
+    while i < len(start_all):
+        container = start_all[i]
         if container.running:
             print_msg("already running.", service=container.service.name,\
                 container=container.name,
                 color="green")
-        t = LaunchThreaded.attempt_launch(container,
-            failed_launch_tracker=tracker)
+        if i < len(start_all) - 1:
+            t = LaunchThreaded.attempt_launch(container,
+                failed_launch_tracker=tracker)
+        else:
+            t = LaunchThreaded.attempt_launch(container,
+                failed_launch_tracker=tracker,
+                to_background_timeout=None)
         if t != None:
             threads.append(t)
+        i += 1
     LaunchThreaded.wait_for_launches(threads)
     if len(tracker) > 0:
         print("docker-services.py: error: some launches failed.",
