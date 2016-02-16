@@ -515,7 +515,6 @@ class ServiceContainer(object):
     def __neq__(self, other):
         return not self.__eq__(other)
 
-    @property
     def launch(self):
         if self.running:
             return
@@ -1148,7 +1147,6 @@ class Service(object):
         current_container_name = None
         i = 0
         for line in contents.split("\n"):
-            print("LINE: " + str(line))
             next_line = None
             i += 1
             if i < len(contents):
@@ -1219,7 +1217,7 @@ class LaunchThreaded(threading.Thread):
     def __init__(self, container, failed_launch_tracker=None):
         super().__init__()
         self.container = container
-        self.failed_launch_tracker = None
+        self.failed_launch_tracker = failed_launch_tracker
         self.path = self.container.service.service_path
 
     def run(self):
@@ -1260,6 +1258,7 @@ class LaunchThreaded(threading.Thread):
                         print_msg("waiting for dependency to launch: " +\
                             str(dependency),
                             service=self.container.service.name,
+                            container=self.container.name,
                             color="yellow")
                     time.sleep(5)
                     while not dependency.container.running:
@@ -1271,6 +1270,9 @@ class LaunchThreaded(threading.Thread):
                                     str(dependency),
                                     service=self.container.service.name,
                                     color="red")
+                                self.failed_launch_tracker.add(
+                                    self.container)
+                                return
                         time.sleep(5)
 
             # Launch the service:
@@ -1284,6 +1286,8 @@ class LaunchThreaded(threading.Thread):
                         "1 second)",\
                         service=self.container.service.name,
                         container=self.container.name, color="red")
+                    if self.failed_launch_tracker != None:
+                        self.failed_launch_tracker.add(self.container)
                     return
                 print_msg("now running.",
                     service=self.container.service.name,
@@ -1984,20 +1988,23 @@ elif args.action == "logs":
             "or \"all\"", file=sys.stderr)
         sys.exit(1)
     containers = TargetsParser.get_containers(" ".join(args.argument),
-        print_msg=True)
+        print_error=True)
     for container in containers:
         print_msg("printing log of container " + str(container),
             service=container.service.name, color='blue')
         try:
-            if subprocess.call([SystemInfo.docker_path(), "logs"],
-                    stderr=subprocess.STDOUT) != 0:
+            retcode = subprocess.call([SystemInfo.docker_path(), "logs",
+                    container.current_running_instance_name],
+                    stderr=subprocess.STDOUT)
+            if retcode != 0:
                 raise subprocess.CalledProcessError(
-                    "logs command reported failure")
+                    retcode, " ".join([SystemInfo.docker_path(), "logs"]))
         except subprocess.CalledProcessError:
-            print_msg("failed. maybe container has no logs yet?",
-                service=container.service.name, color='yellow')
+            print_msg("failed printing logs. " +\
+                "Maybe container has no logs yet?",
+                service=container.service.name,
+                container=container.name, color='yellow')
             pass
-        i += 1
 elif args.action == "shell":
     if len(args.argument) == 0:
         print("docker-services.py: error: please specify the name " + \
@@ -2056,10 +2063,8 @@ elif args.action == "start" or args.action == "restart":
     # will be started too:
     list_changed = True
     while list_changed:
-        print("Current start_containers list: " + str(start_containers))
         list_changed = False
         for container in containers:
-            print("Examining container: " + str(container))
             for dep in container.dependencies:
                 dep_container = None
                 try:
