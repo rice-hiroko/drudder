@@ -271,7 +271,8 @@ class SystemInfo(object):
                 "mount point of " +\
                 str(base_path) + " was returned as: None")
             print_msg(nontrivial_error, color="red")
-            return False
+            raise ValueError("cannot check path. mount point unknown: " +\
+                str(path))
 
         # get btrfs subvolume list:
         output = subprocess.check_output([
@@ -1730,29 +1731,35 @@ class Snapshots(object):
 
         if os.path.exists(os.path.join(self.service.service_path,
                 "livedata")):
-            if not SystemInfo.is_btrfs_subvolume(os.path.join(
-                    self.service.service_path, "livedata"))\
-                    and len(self.service.rw_volumes) > 0:
-                if self.service.is_running():
-                    print_msg("the livedata/ dir of this service will " +\
-                        "still need to be converted to a subvolume to " +\
-                        "enable snapshots.\n" + \
-                        "Fix it by doing this:\n" + \
-                        "1. Stop the service with: docker-services.py stop " +\
-                            self.service.name + "\n" + \
-                        "2. Snapshot the service once with: " +\
+            try:
+                if not SystemInfo.is_btrfs_subvolume(os.path.join(
+                        self.service.service_path, "livedata"))\
+                        and len(self.service.rw_volumes) > 0:
+                    if self.service.is_running():
+                        print_msg("the livedata/ dir of this service will " +\
+                            "still need to be converted to a subvolume to " +\
+                            "enable snapshots.\n" + \
+                            "Fix it by doing this:\n" + \
+                            "1. Stop the service with: docker-services.py "+\
+                                "stop " +\
+                                self.service.name + "\n" + \
+                            "2. Snapshot the service once with: " +\
+                                "docker-services.py "+\
+                                "snapshot " + self.service.name + "\n",
+                            service=self.service.name, color="yellow")
+                        return
+                    else:
+                        print_msg("the livedata/ dir of this service still " +\
+                            "needs conversion to btrfs subvolume.\n" +\
+                            "Fix it by snapshotting it once with: " +\
                             "docker-services.py "+\
                             "snapshot " + self.service.name + "\n",
-                        service=self.service.name, color="yellow")
-                    return
-                else:
-                    print_msg("the livedata/ dir of this service still " +\
-                        "needs conversion to btrfs subvolume.\n" +\
-                        "Fix it by snapshotting it once with: " +\
-                        "docker-services.py "+\
-                        "snapshot " + self.service.name + "\n",
-                        service=self.service.name, color="yellow")
-                    return
+                            service=self.service.name, color="yellow")
+                        return
+            except RuntimeError:
+                print_msg("there was a problem. btrfs snapshotting won't " +\
+                          "work as intended." +\
+                          service=self.service.name, color="red")
         # Everything seems fine so far.
         return
 
