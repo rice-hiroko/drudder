@@ -267,8 +267,9 @@ class SystemInfo(object):
         base_path = os.path.normpath(path + "/../")
         mount = SystemInfo.get_fs_mount_root(base_path)
         if mount == None:
-            print("docker-services.py: warning: mount point of " +\
-                str(base_path) + " is None !!")
+            print("docker-services.py: warning: internal problem: " +\
+                "mount point of " +\
+                str(base_path) + " was returned as: None")
             print_msg(nontrivial_error, color="red")
             return False
 
@@ -494,6 +495,10 @@ class DataVolume(object):
         self.owning_container = None
         self.owning_container_path = None
         self.specified_in_yml = False
+
+    def __hash__(self):
+        return hash(str(self.id) + str(self.owning_container_path) +\
+            str(self.known_host_mount))
 
     def __repr__(self):
         if self.id != None:
