@@ -717,7 +717,8 @@ class ServiceContainer(object):
         """
         try:
             output = subprocess.check_output([SystemInfo.docker_path(),
-                "inspect", self.current_running_instance_name])
+                "inspect", self.current_running_instance_name],
+                stderr=subprocess.DEVNULL)
         except subprocess.CalledProcessError:
             raise ValueError("container not created - you might need to "+\
                 "launch it first")
@@ -752,7 +753,8 @@ class ServiceContainer(object):
         try:
             output = subprocess.check_output([SystemInfo.docker_path(),
                 "inspect",
-                self.current_running_instance_name])
+                self.current_running_instance_name],
+                stderr=subprocess.DEVNULL)
         except subprocess.CalledProcessError:
             raise ValueError("container not created - you might need to "+\
                 "launch it first")
@@ -866,15 +868,15 @@ class ServiceContainer(object):
         def add_volume(vol_line, from_yml=False):
             host_mount_path = None
             known_name = None
-            if vol_line[1] != None:
-                if vol_line[1].startswith("/") or \
-                        vol_line[1].startswith("./"):
-                    host_mount_path = vol_line[1]
+            if vol_line[0] != None:
+                if vol_line[0].startswith("/") or \
+                        vol_line[0].startswith("./"):
+                    host_mount_path = vol_line[0]
                 else:
-                    known_name = vol_line[1]
+                    known_name = vol_line[0]
             vol = DataVolume(known_host_mount=host_mount_path,
                 id=known_name, name=known_name)
-            vol._set_owning_container(self, vol_line[0])
+            vol._set_owning_container(self, vol_line[1])
             vol.specified_in_yml = from_yml
             volumes.append(vol)
 
@@ -2494,12 +2496,13 @@ elif args.action == "info":
     if containers == None:
         sys.exit(1)
     for container in containers:
-        print("--- Info for: " + str(container) + " ---")
+        print("# --- Info for: " + str(container) + " ---")
+        print(str(container) + ":")
         print("  Canonical docker container name: " +\
             container.default_container_name)
         print("  Owning service info:")
-        print("    -- name: " + str(container.service.name))
-        print("    -- location: " + str(container.service.service_path))
+        print("    Name: " + str(container.service.name))
+        print("    Location: " + str(container.service.service_path))
         print("  Running: " + str(container.running))
         print("  Volume information:")
         for volume in container.volumes:
@@ -2523,7 +2526,7 @@ elif args.action == "info":
                         else:
                             sys.stdout.write("          ")
                         got_mount_info = True
-                        print("Host directory: " +\
+                        print("Host mount path: " +\
                             str(mount.host_path))
                     if mount.mount_container_filesystem_path != None:
                         if not got_mount_info:
@@ -2531,7 +2534,7 @@ elif args.action == "info":
                         else:
                             sys.stdout.write("          ")
                         got_info = True
-                        print("Mount path in container: " +\
+                        print("Container mount path: " +\
                             str(mount.mount_container_filesystem_path))
                     if not got_info:
                         if not got_mount_info:
