@@ -369,6 +369,10 @@ class SystemInfo(object):
                 continue
             break
 
+        if not output.startswith("/"):
+            raise RuntimeError("failed to parse df output")
+        return output
+
     @staticmethod
     def filesystem_type_at_path(path):
         """ Find out the filesystem a given directory or file is on and return
@@ -2239,9 +2243,10 @@ elif args.action == "rebuild":
         sys.exit(1)
     for container in containers:
         if container.running:
-            print_msg("cannot safely rebuild, one of the specified " +\
-                "containers is running: " +\
-                str(" ".join([str(container) for container in containers])),
+            print_msg("cannot safely rebuild, one or more of the " +\
+                "specified " +\
+                "containers is/are currently running: " +\
+                str(", ".join([str(container) for container in containers])),
                 color="red")
             print("docker-services.py: error: aborted rebuilding")
             sys.exit(1)
