@@ -1478,7 +1478,8 @@ class LaunchThreaded(threading.Thread):
                 container=self.container.name, color="blue")
             try:
                 self.container.launch(
-                    force_container_recreation=force_container_recreation)
+                    force_container_recreation=\
+                    self.force_container_recreation)
                 time.sleep(1)
                 if not self.container.running:
                     print_msg("failed to launch. (nothing running after " +\
