@@ -261,10 +261,16 @@ class SystemInfo(object):
         """
         nontrivial_error = "error: failed to map a btrs subvolume "+\
             "to its POSIX path. This seems to be a non-trivial setup."+\
-            " You should probably do your snapshotting manually!!"
+            " You should do your snapshotting manually!!"
 
         # first, get the containing mount point:
-        mount = SystemInfo.get_fs_mount_root(os.path.normpath(path + "/../"))
+        base_path = os.path.normpath(path + "/../")
+        mount = SystemInfo.get_fs_mount_root(base_path)
+        if mount == None:
+            print("docker-services.py: warning: mount point of " +\
+                str(base_path) " is None !!")
+            print_msg(nontrivial_error, color="red")
+            return False
 
         # get btrfs subvolume list:
         output = subprocess.check_output([
@@ -282,7 +288,7 @@ class SystemInfo(object):
                 if line == "DELETED":
                     continue
                 print_msg(nontrivial_error, color="red")
-                sys.exit(1)
+                return False
             if os.path.normpath(os.path.abspath(full_path_guess)) == \
                     os.path.normpath(os.path.abspath(path)):
                 try:
