@@ -1715,7 +1715,8 @@ class Snapshots(object):
 
         self.btrfs_tool_check()
 
-        if os.path.exists(os.path.join(service_path, "livedata")):
+        if os.path.exists(os.path.join(self.service.service_path,
+                "livedata")):
             if not SystemInfo.is_btrfs_subvolume(os.path.join(
                     self.service.service_path, "livedata"))\
                     and len(self.service.rw_volumes) > 0:
