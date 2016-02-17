@@ -2257,7 +2257,7 @@ elif args.action == "rebuild":
             service=container.service.name, container=container.name,
             color="blue")
         subprocess.call([SystemInfo.docker_compose_path(), "build",
-            "--no-cache", container.name],
+            "--no-cache", "--pull", container.name],
             cwd=container.service.service_path)
     print_msg("Rebuilding complete.", color="green")
     sys.exit(0)
