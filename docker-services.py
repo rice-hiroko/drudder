@@ -798,7 +798,8 @@ class ServiceContainer(object):
 
             # Make sure path is absolute:
             if len(parts) >= 2:
-                if (parts[0].startswith("/") or parts[0].startswith("./")) \
+                if (parts[0].startswith("/") or parts[0].startswith("./") or
+                        parts[0].startswith("../")) \
                         and not os.path.isabs(parts[0]):
                     parts[0] = os.path.join(
                         os.path.realpath(self.service.service_path), parts[0])
@@ -870,7 +871,8 @@ class ServiceContainer(object):
             known_name = None
             if vol_line[0] != None:
                 if vol_line[0].startswith("/") or \
-                        vol_line[0].startswith("./"):
+                        vol_line[0].startswith("./") or \
+                        vol_line[0].startswith("../"):
                     host_mount_path = vol_line[0]
                 else:
                     known_name = vol_line[0]
@@ -1530,11 +1532,11 @@ class LaunchThreaded(threading.Thread):
         launch_t.join(to_background_timeout)
         if launch_t.isAlive():
             # This took too long, run in background:
-            print_msg("Maximum waiting time exceeded, " + \
-                "resuming launch in background.",
-                service=container.service.name,
-                container=container.name,
-                color="yellow")
+            #print_msg("Maximum waiting time exceeded, " + \
+            #    "resuming launch in background.",
+            #    service=container.service.name,
+            #    container=container.name,
+            #    color="yellow")
             return launch_t
         return None
 
