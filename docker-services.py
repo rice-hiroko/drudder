@@ -294,7 +294,8 @@ class SystemInfo(object):
             if os.path.normpath(os.path.abspath(full_path_guess)) == \
                     os.path.normpath(os.path.abspath(path)):
                 try:
-                    output = subprocess.check_output([locate_binary("stat"),
+                    output = subprocess.check_output([
+                        SystemInfo.locate_binary("stat"),
                         "-c", "%i", path]).decode('utf-8', 'ignore').strip()
                 except subprocess.CalledProcessError as e:
                     # stat failed, although btrfs subvolume list lists it!
@@ -306,7 +307,8 @@ class SystemInfo(object):
                     sys.exit(1)
                 return True
         try:
-            output = subprocess.check_output([locate_binary("stat"),
+            output = subprocess.check_output([
+                SystemInfo.locate_binary("stat"),
                 "-c", "%i", path]).decode('utf-8', 'ignore').strip()
         except subprocess.CalledProcessError as e:
             pass
