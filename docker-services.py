@@ -2508,43 +2508,77 @@ elif args.action == "info":
         print("  Volume information:")
         for volume in container.volumes:
             got_vol_info = False
-            print("    Volume " + str(volume) + ":")
             if volume.id != None:
+                if not got_vol_info:
+                    sys.stdout.write("  - ")
+                else:
+                    sys.stdout.write("    ")
                 got_vol_info = True
-                print("      Id: " + str(volume.id))
+                print("Id: " + str(volume.id))
             if volume.name != None:
+                if not got_vol_info:
+                    sys.stdout.write("  - ")
+                else:
+                    sys.stdout.write("    ")
                 got_vol_info = True
-                print("      Name: " + str(volume.name))
+                print("Name: " + str(volume.name))
+                print("    Unnamed: false")
+            else:
+                if not got_vol_info:
+                    sys.stdout.write("  - ")
+                else:
+                    sys.stdout.write("    ")
+                got_vol_info = True
+                print("Unnamed: true")
+            if volume.specified_in_yml:
+                if not got_vol_info:
+                    sys.stdout.write("  - ")
+                else:
+                    sys.stdout.write("    ")
+                got_vol_info = True
+                print("Specified in YAML: true")
+            else:
+                if not got_vol_info:
+                    sys.stdout.write("  - ")
+                else:
+                    sys.stdout.write("    ")
+                got_vol_info = True
+                print("Specified in YAML: false")
             mounts = volume.mounts
             if len(mounts) > 0:
+                if not got_vol_info:
+                    sys.stdout.write("  - ")
+                else:
+                    sys.stdout.write("    ")
                 got_vol_info = True
-                print("      Mounts:")
+                print("Mounts:")
                 for mount in mounts:
                     got_mount_info = False
                     if mount.host_path != None:
                         if not got_mount_info:
-                            sys.stdout.write("        - ")
+                            sys.stdout.write("    - ")
                         else:
-                            sys.stdout.write("          ")
+                            sys.stdout.write("      ")
                         got_mount_info = True
                         print("Host mount path: " +\
                             str(mount.host_path))
                     if mount.mount_container_filesystem_path != None:
                         if not got_mount_info:
-                            sys.stdout.write("        - ")
+                            sys.stdout.write("    - ")
                         else:
-                            sys.stdout.write("          ")
-                        got_info = True
+                            sys.stdout.write("      ")
+                        got_mount_info = True
                         print("Container mount path: " +\
                             str(mount.mount_container_filesystem_path))
-                    if not got_info:
-                        if not got_mount_info:
-                            sys.stdout.write("        - ")
-                        else:
-                            sys.stdout.write("          ")
+                    if not got_mount_info:
+                        sys.stdout.write("    - ")
                         print("<unknown mount>")
             if not got_vol_info:
-                print("      <no info known>")
+                if not got_vol_info:
+                    sys.stdout.write("  - ")
+                else:
+                    sys.stdout.write("    ")
+                print("<no info known>")
 elif args.action == "clean":
     Service.global_clean_up(args.force != True)
 else:
