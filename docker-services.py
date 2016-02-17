@@ -268,7 +268,7 @@ class SystemInfo(object):
         mount = SystemInfo.get_fs_mount_root(base_path)
         if mount == None:
             print("docker-services.py: warning: mount point of " +\
-                str(base_path) " is None !!")
+                str(base_path) + " is None !!")
             print_msg(nontrivial_error, color="red")
             return False
 
