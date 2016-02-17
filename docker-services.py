@@ -267,7 +267,8 @@ class SystemInfo(object):
         mount = SystemInfo.get_fs_mount_root(os.path.normpath(path + "/../"))
 
         # get btrfs subvolume list:
-        output = subprocess.check_output([locate_binary("btrfs"),
+        output = subprocess.check_output([
+            SystemInfo.locate_binary("btrfs"),
             "subvolume", "list", path]).\
             decode("utf-8", "ignore").strip().split("\n")
         for line in output:
