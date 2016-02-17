@@ -1454,11 +1454,11 @@ class LaunchThreaded(threading.Thread):
                 if not dependency.container.running:
                     if not waiting_msg:
                         waiting_msg = True
-                        print_msg("waiting for dependency to launch: " +\
-                            str(dependency),
-                            service=self.container.service.name,
-                            container=self.container.name,
-                            color="yellow")
+                        #print_msg("waiting for dependency to launch: " +\
+                        #    str(dependency),
+                        #    service=self.container.service.name,
+                        #    container=self.container.name,
+                        #    color="yellow")
                     time.sleep(5)
                     while not dependency.container.running:
                         if self.failed_launch_tracker != None:
