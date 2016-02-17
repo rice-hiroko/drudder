@@ -52,15 +52,23 @@ freely, subject to the following restrictions:
       docker-services.py list                - list all known services
       docker-services.py start <service>     - starts the specified service
       docker-services.py stop <service>      - stops the specified service
-      docker-services.py restart <service>   - restarts the given service      
+      docker-services.py restart <service>   - restarts the given service.
+                                               WARNING: the containers will
+                                               *always* get rebuilt and
+                                               recreated by this command.
+                                               All data in them outside of
+                                               volumes will be reset!!
       docker-services.py logs <service>      - print logs of all docker 
                                                containers of the service
-      docker-services.py shell <service> <subservice>  - run a shell in the
-                                                         specified subservice.
+      docker-services.py shell <service>[/<subservice>]  - run a shell in the
+                                                           specified
+                                                           subservice's
+                                                           container
       docker-services.py snapshot <service>  - makes a snapshot of the live
                                                data if enabled (optional)
       docker-services.py clean               - deletes all containers that
-                                               aren't running (IRREVOCABLE)
+                                               aren't running and all dangling
+                                               volumes !! (IRREVOCABLE)
     ```
 
     **Hint**: You can always use "all" as service target.
@@ -438,13 +446,88 @@ def print_msg(text, service=None, container=None, color="blue"):
             initial_length += len("/" + container)
     initial_length += len("] ") 
 
+    text_color = "\033[0m"
+    if color == "yellow" or color == "red":
+        text_color += color_code()
     print("\033[0m\033[1m[\033[0m" + docker_services_part + \
-        service_part + "\033[0m\033[1m] \033[0m" + \
+        service_part + "\033[0m\033[1m] " + text_color + \
         textwrap.fill(text, 79,
             initial_indent=(" " * initial_length),
             subsequent_indent=(" " * initial_length))[
             initial_length:] + \
         "\033[0m")
+
+class DataVolumeMount(object):
+    def __init__(self, host_path=None,
+            mount_container=None, mount_container_filesystem_path=None):
+        self.host_path = host_path
+        self.container = mount_container
+        self.mount_container_filesystem_path = mount_container_filesystem_path
+
+    def __repr__(self):
+        if self.host_path != None:
+            return self.host_path
+        return "<unspecified volume mount of " + str(container) + ">"
+
+class DataVolume(object):
+    def __init__(self, known_host_mount=None, id=None, name=None):
+        self.known_host_mount = known_host_mount
+        self.id = id
+        self.name = None
+        self.owning_container = None
+        self.owning_container_path = None
+        self.specified_in_yml = False
+
+    def __repr__(self):
+        if self.id != None:
+            return str(self.id)
+        if self.owning_container_path != None:
+            return str(self.owning_container_path)
+        if self.known_host_mount != None:
+            return str(self.known_host_mount)
+        return "<DataVolume object with unknown mount and unknown id>"
+
+    def __eq__(self, other):
+        if other == None:
+            return False
+        if not hasattr(other, "id") and not hasattr(other, "name"):
+            return False
+        if not hasattr(other, "known_host_mount"):
+            return False
+        if self.id != None and other.id == self.id:
+            return True
+        if self.known_host_mount != None and \
+                self.known_host_mount == other.known_host_mount:
+            return True
+        if self.owning_container != None and \
+                self.owning_container_path != None:
+            if self.owning_container == other.owning_container and \
+                    os.path.normpath(self.owning_container_path) ==\
+                    os.path.normpath(other.owning_container_path):
+                return True
+        return False
+
+    def _set_owning_container(self, container, container_fs_path=None):
+        self.owning_container = container
+        if container_fs_path != None:
+            self.owning_container_path = container_fs_path
+
+    @property
+    def mounts(self):
+        if self.known_host_mount != None:
+            if self.owning_container != None:
+                return [ DataVolumeMount(host_path=self.known_host_mount,
+                    mount_container=self.owning_container,
+                    mount_container_filesystem_path=\
+                    self.owning_container_path) ]
+            else:
+                return [ DataVolumeMount(host_path=self.known_host_mount) ]
+        elif self.owning_container != None:
+            return [ DataVolumeMount(mount_container=self.owning_container,
+                mount_container_filesystem_path=\
+                self.owning_container_path) ]
+        else:
+            return []
 
 class ServiceDependency(object):
     """ This class holds the info describing the dependency to another
@@ -518,17 +601,48 @@ class ServiceContainer(object):
     def launch(self):
         if self.running:
             return
-        subprocess.check_call([SystemInfo.docker_compose_path(),
-            "rm", "-f", self.name],
-            cwd=self.service.service_path)
-        subprocess.check_call([SystemInfo.docker_compose_path(),
-            "build", self.name],
-            cwd=self.service.service_path)
+
+        # Find volumes that will be dangling and not re-attached by
+        # docker-compose on container recreation:
+        potentially_lost_volumes = []
+        for volume in self.volumes:
+            if volume.name != None and volume.specified_in_yml:
+                # Named volume specified in .yml -> we should fine
+                continue
+            host_mounted = False
+            for mount in volume.mounts:
+                if mount.host_path != None:
+                    host_mounted = True
+                    break
+            if host_mounted and volume.specified_in_yml:
+                # Host mount specified in .yml -> we should be fine
+                continue
+            potentially_lost_volumes.append(volume)
+        if len(potentially_lost_volumes) == 0:
+            subprocess.check_call([SystemInfo.docker_compose_path(),
+                "rm", "-f", self.name],
+                cwd=self.service.service_path)
+            subprocess.check_call([SystemInfo.docker_compose_path(),
+                "build", self.name],
+                cwd=self.service.service_path)
+        else:
+            for vol in potentially_lost_volumes:
+                if len(vol.mounts) > 0:
+                    print("vol host path: " + str(vol.mounts[0].host_path))
+                print("vol owning container: " + str(vol.owning_container))
+                print("vol specified in yml: " + str(vol.specified_in_yml))
+                print_msg("ONLY LIMITED RESTART, CONTAINER WONT BE "+\
+                    "UPDATED TO NEWEST IMAGE. " +\
+                    "Cannot recreate container safely: " +\
+                    "container has a volume that might be lost " +\
+                    "or dangling after recreation: "+\
+                    "" + str(vol),
+                    service=self.service.name,
+                    container=self.name, color="yellow")
         subprocess.check_call([SystemInfo.docker_compose_path(),
             "up", "-d", self.name],
             cwd=self.service.service_path)
 
-    @property
     def stop(self):
         subprocess.check_call([SystemInfo.docker_compose_path(),
             "stop", self.name], cwd=self.service.service_path)
@@ -566,21 +680,32 @@ class ServiceContainer(object):
         """
         try:
             output = subprocess.check_output([SystemInfo.docker_path(),
-                "inspect",
-                container_id])
+                "inspect", self.current_running_instance_name])
         except subprocess.CalledProcessError:
             raise ValueError("container not created - you might need to "+\
                 "launch it first")
         result = json.loads(output.decode("utf-8", "ignore"))
         volumes_list = []
-        for volume in result[0]["Volumes"]:
-            volumes_list.append(volume)
+        if not rw_only:
+            if "Volumes" in result[0]:
+                for volume in result[0]["Volumes"]:
+                    volumes_list.append(volume)
+            else:
+                for volume in result[0]["Config"]["Volumes"]:
+                    volumes_list.append(volume)
         if rw_only:
-            if not ("VolumesRW" in result[0]):
-                return []
-            for volume in result[0]["Volumes"]:
-                if not result[0]["VolumesRW"][volume]:
-                    volumes_list.remove(volume)
+            if "Volumes" in result[0]:
+                if not ("VolumesRW" in result[0]):
+                    return []
+                for volume in result[0]["Volumes"]:
+                    if not result[0]["VolumesRW"][volume]:
+                        volumes_list.remove(volume)
+            else:
+                if not ("VolumesRW" in result[0]["Config"]):
+                    return []
+                for volume in result[0]["Config"]["Volumes"]:
+                    if not result[0]["Config"]["VolumesRW"][volume]:
+                        volumes_list.remove(volume)
         return volumes_list
 
     def _map_host_dir_to_container_volume_dir(self, volume_dir):
@@ -590,7 +715,7 @@ class ServiceContainer(object):
         try:
             output = subprocess.check_output([SystemInfo.docker_path(),
                 "inspect",
-                container_id])
+                self.current_running_instance_name])
         except subprocess.CalledProcessError:
             raise ValueError("container not created - you might need to "+\
                 "launch it first")
@@ -601,8 +726,7 @@ class ServiceContainer(object):
                 return mount["Source"]
         return None
 
-    @property
-    def active_volumes(self):
+    def _active_volumes(self, rw_only=False):
         """ Get all the active volumes of this container. May return an empty
             or outdated list if the container is stopped.
 
@@ -611,28 +735,14 @@ class ServiceContainer(object):
         """
 
         try:
-            return [(volume, self._map_host_dir_to_container_volume_dir(
-                volume)) for volume in self._get_active_volumes()]
+            return [(self._map_host_dir_to_container_volume_dir(
+                volume), volume) \
+                for volume in \
+                self._get_active_volume_directories(rw_only=rw_only)]
         except ValueError:
             return []
 
-    @property
-    def active_writable_volumes(self):
-        """ Get all the active volumes of this container which are mounted
-            with write capabilities.
-            May return an empty list if the container is stopped.
-
-            Returns a list of tuples (host file system path,
-                container filesystem path).
-        """
-        try:
-            return [(volume, self._map_host_dir_to_container_volume_dir(
-                volume)) for volume in self._get_active_volumes(rw_only=True)]
-        except ValueError:
-            return []
-
-    @property
-    def config_specified_volumes(self, rw_only=False):
+    def _config_specified_volumes(self, rw_only=False):
         """ Attempt to parse and return all volumes used by this container
             from the according docker-compose.yml.
 
@@ -644,13 +754,15 @@ class ServiceContainer(object):
             # Check if read-only or not:
             rwro = "rw"
             if len(parts) >= 3:
-                if parts[2] == "ro":
+                if "ro" in [item.strip() for item in parts[2].split(",")]:
                     rwro = "ro"
 
             # Make sure path is absolute:
             if len(parts) >= 2:
-                if not os.path.isabs(parts[0]):
-                    parts[0] = os.path.join(service_path, parts[0])
+                if (parts[0].startswith("/") or parts[0].startswith("./")) \
+                        and not os.path.isabs(parts[0]):
+                    parts[0] = os.path.join(
+                        os.path.realpath(self.service.service_path), parts[0])
                     parts[0] = os.path.normpath(os.path.abspath(parts[0]))
 
             # Add to list:
@@ -712,31 +824,54 @@ class ServiceContainer(object):
                 parse_volume_line(parts) 
         return volumes
 
+    def _get_volumes(self, rw_only=False):
+        volumes = []
+        def add_volume(vol_line, from_yml=False):
+            host_mount_path = None
+            known_name = None
+            if vol_line[1] != None:
+                if vol_line[1].startswith("/") or \
+                        vol_line[1].startswith("./"):
+                    host_mount_path = vol_line[1]
+                else:
+                    known_name = vol_line[1]
+            vol = DataVolume(known_host_mount=host_mount_path,
+                id=known_name, name=known_name)
+            vol._set_owning_container(self, vol_line[0])
+            vol.specified_in_yml = from_yml
+            volumes.append(vol)
+
+        volumes_in_yml = set()
+        vol_lines = {}
+        for vol1 in self._active_volumes(rw_only=rw_only):
+            if not vol1[0] in vol_lines or vol_lines[vol1[0]] == None:
+                vol_lines[vol1[0]] = vol1[1]
+        for vol2 in self._config_specified_volumes(rw_only=rw_only):
+            if not vol2[0] in vol_lines or vol_lines[vol2[0]] == None:
+                vol_lines[vol2[0]] = vol2[1]
+            volumes_in_yml.add(vol2[0])
+        for vol_line in vol_lines:
+            if vol_line in volumes_in_yml:
+                add_volume((vol_line, vol_lines[vol_line]), from_yml=True)
+            else:
+                add_volume((vol_line, vol_lines[vol_line]))
+        return volumes
+
     @property
     def volumes(self):
-        """ A list of tuples (host file path, container file path) of all the
-            volumes this container possibly has, collected from as many
-            sources as possible like the docker-compose.yml and container
-            inspection.
+        """ Returns a list of DataVolume instances representing all volumes
+            which are in any sort of known connection to this container.
         """
-        volumes = []
-        for vol1 in self.active_volumes:
-            volumes.append(vol1)
-        for vol2 in self.config_specified_volumes():
-            volumes.append(vol2)
+        return self._get_volumes(rw_only=False)
 
     @property
     def rw_only_volumes(self):
-        """ A list of tuples (host file path, container file path) of all the
-            volumes this container possibly has, collected from as many
-            sources as possible like the docker-compose.yml and container
-            inspection.
+        """ Returns a list of DataVolume instances representing all volumes
+            which are in any sort of known connection to this container.
+            Limited to all the volumes that are actually writable for the
+            container, excluding the read-only ones.
         """
-        volumes = []
-        for vol1 in self.active_writable_volumes:
-            volumes.append(vol1)
-        for vol2 in self.config_specified_volumes(rw_only=True):
-            volumes.append(vol2)
+        return self._get_volumes(rw_only=True)
 
     @property
     def dependencies(self):
@@ -790,6 +925,9 @@ class Service(object):
     def __init__(self, service_name, service_path):
         self.name = service_name
         self.service_path = service_path
+
+    def __repr__(self):
+        return self.name + " service at " + str(self.service_path)
 
     def __eq__(self, other):
         if not hasattr(other, "name") and not hasattr(other,
@@ -848,16 +986,19 @@ class Service(object):
     def _fix_container_name(self, container_name):
         """ !! BIG HACK !!
             Sometimes docker-compose gives us just a shortened name for a
-            container. While I am not fully aware of the algorithm, I assume it
-            will usually still be unique. In this function, we try to get back to
-            the full unshortened name.
+            container. While I am not fully aware of the algorithm, I assume
+            it will usually still be unique. In this function, we try to get
+            back the full unshortened name.
         """
+        assert(container_name != None)
         for container in self.containers:
-            if container.name == container_name:
-                return container_name
+            if container.current_running_instance_name == container_name \
+                    or container.default_container_name == container_name:
+                return container.name
         matched_name = None
         for container in self.containers:
-            if container.name.startswith(container_name):
+            if container.current_running_instance_name.startswith(
+                    container_name):
                 if matched_name != None:
                     raise RuntimeError("encountered unexpected non-unique " +\
                         "container label")
@@ -898,8 +1039,9 @@ class Service(object):
                 # this is a running container!
                 space_pos = output_line.find(" ")
                 running_containers.append(output_line[:space_pos])
-        return [self._fix_container_name(container) \
+        l = [self._fix_container_name(container) \
             for container in running_containers]
+        return l
 
     def _internal_docker_compose_links(self, container_name):
         """ Attempt to parse and return all containers referenced as external
@@ -1052,10 +1194,24 @@ class Service(object):
         return list(volume_set)
 
     @staticmethod
-    def clean_up():
+    def global_clean_up(ask=True):
         """ This function will check the status of all docker containers, and then
             irrevocably delete all containers that aren't running.
         """
+        if ask:
+            answer = input("\033[1m!! DANGER !!\033[0m\n"+\
+                "This will irrevocably delete all "+\
+                "stopped containers. "+\
+                "It will also delete all volumes that are neither "+\
+                "a host-mounted directory, nor are currently owned by any "+\
+                "currently existing container (in short, all dangling "+\
+                "volumes).\n\n(Avoid this warning next time " +\
+                "with --force)\n\n" +\
+                "Are you sure you want to continue? [Enter y/N]")
+            if not answer == "y" and not answer == "Y":
+                print("docker-services.py: error: cleaning was aborted "+\
+                    "by user.", file=sys.stderr)
+                sys.exit(1)
         print_msg("cleaning up stopped containers...")
         output = subprocess.check_output([SystemInfo.docker_path(), "ps", "-a"])
         output = output.decode("utf-8", "ignore").\
@@ -1228,10 +1384,10 @@ class LaunchThreaded(threading.Thread):
             if ("owner" in perm_info["livedata-permissions"]) \
                     and os.path.exists(os.path.join(
                         self.path, "livedata")):
-                print_msg("ensuring file permissions of livedata folder...",\
-                    service=self.container.service.name,
-                    container=self.container.name,
-                        color="blue")
+                #print_msg("ensuring file permissions of livedata folder...",\
+                #    service=self.container.service.name,
+                #    container=self.container.name,
+                #        color="blue")
                 owner = perm_info["livedata-permissions"]["owner"]
                 try:
                     owner = int(owner)
@@ -1269,6 +1425,7 @@ class LaunchThreaded(threading.Thread):
                                     "dependency launch: " +\
                                     str(dependency),
                                     service=self.container.service.name,
+                                    container=self.container.name,
                                     color="red")
                                 self.failed_launch_tracker.add(
                                     self.container)
@@ -1341,6 +1498,7 @@ class LaunchThreaded(threading.Thread):
     @staticmethod
     def stop(container):
         """ Stop a service. """
+        assert(container != None)
         container.stop()
 
     @staticmethod
@@ -1459,6 +1617,9 @@ parser.add_argument("action",
              docker images of course won't be touched. ''')
     )
 parser.add_argument("argument", nargs="*", help="argument(s) to given action")
+parser.add_argument("--force",
+    default=False, action="store_true",
+    dest="force")
 if len(" ".join(sys.argv[1:]).strip()) == 0:
     parser.print_help()
     sys.exit(1)
@@ -1588,8 +1749,12 @@ class Snapshots(object):
             service=self.service.name, color="blue")
 
         # Check which volumes this service has:
-        volumes = get_service_volumes(directory, service, rw_only=True)
-        if len(volumes) == 0:
+        rw_volumes = set()
+        for container in self.service.containers:
+            for volume in container.rw_only_volumes:
+                rw_volumes.add(volume)
+        rw_volumes = list(rw_volumes)
+        if len(rw_volumes) == 0:
             print_msg("service has no read-write volumes, nothing to do.",
                 service=self.service.name, color="blue")
             return True
@@ -1599,27 +1764,42 @@ class Snapshots(object):
                 self.service.name, "livedata")):
             print_msg("error: service has read-write volumes, " + \
                 "but no livedata/ " +\
-                "folder. fix this to enable snapshots",
+                "folder. Fix this to enable snapshots",
                 service=self.service.name,
                 color="red")
             return False
 
         # Check if we have any volumes which are actually in livedata/:
         empty_snapshot = True
-        for volume in volumes:
-            relpath = os.path.relpath(
-                os.path.realpath(volume),
-                os.path.realpath(os.path.join(
-                self.service.name, "livedata")),
-            )
-            if relpath.startswith(os.pardir + os.sep):
-                # volume is not in livedata/!
-                print_msg("warning: volume " + str(volume) + \
-                    " is NOT in livedata/ - " +\
-                    "not covered by snapshot!",
-                    service=self.service.name, color="yellow")
-            else:
-                empty_snapshot = False
+        for volume in rw_volumes:
+            for mount in volume:
+                if mount.container == None:
+                    continue
+                if mount.container.service != self.service:
+                    continue
+                if mount.host_path == None:
+                    # This volume mount is not a host mount!!
+                    print_msg("warning: volume " + str(volume) + \
+                        " used by " + str(mount.container) +\
+                        " is NOT a host mount in livedata/" +\
+                        " and won't be covered by the snapshot",
+                        service=self.service.name, color="yellow")
+                relpath = os.path.relpath(
+                    os.path.realpath(mount.host_path),
+                    os.path.realpath(os.path.join(
+                    self.service.name, "livedata")),
+                )
+                if relpath.startswith(os.pardir + os.sep):
+                    # This volume mount is not in livedata/!
+                    print_msg("warning: volume " + str(volume) + \
+                        " used by " + str(mount.container) +\
+                        " is a host mount that is NOT mounted in" +\
+                        " the livedata/ folder" +\
+                        " and won't be covered by the snapshot: " +\
+                        str(mount),
+                        service=self.service.name, color="yellow")
+                else:
+                    empty_snapshot = False
         if empty_snapshot:
             print_msg("this snapshot would be empty because no read-write " +\
                 "volumes are mounted to livedata/ - skipping.",
@@ -2007,6 +2187,32 @@ elif args.action == "logs":
                 service=container.service.name,
                 container=container.name, color='yellow')
             pass
+elif args.action == "rebuild":
+    if len(args.argument) == 0:
+        print("docker-services.py: error: please specify the name " + \
+            "of the service for which an interactive shell should be started",
+            file=sys.stderr)
+        sys.exit(1)
+    containers = TargetsParser.get_containers(" ".join(args.argument),
+        print_error=True)
+    if containers == None:
+        sys.exit(1)
+    for container in containers:
+        if container.running:
+            print_msg("cannot safely rebuild, one of the specified " +\
+                "containers is running: " + str(containers),
+                color="red")
+            print("docker-services.py: error: aborted rebuilding")
+            sys.exit(1)
+    for container in containers:
+        print_msg("rebuilding container with no cache",
+            service=container.service.name, container=container.name,
+            color="blue")
+        subprocess.call([SystemInfo.docker_compose_path(), "build",
+            "--no-cache", container.name],
+            cwd=container.service.service_path)
+    print_msg("Rebuilding complete.", color="green")
+    sys.exit(0)
 elif args.action == "shell":
     if len(args.argument) == 0:
         print("docker-services.py: error: please specify the name " + \
@@ -2082,7 +2288,7 @@ elif args.action == "start" or args.action == "restart":
                         str(dep), file=sys.stderr)
                     sys.exit(1)
                 if not dep_container in start_containers:
-                    start_containers.prepend(dep_container)
+                    start_containers = [ dep_container ] + start_containers
                     list_changed = True
 
     # Collect services depending on the containers that are restarted in the
@@ -2107,11 +2313,14 @@ elif args.action == "start" or args.action == "restart":
                                 restart_dependant_containers.append(container)
 
     tracker = FailedLaunchTracker()
+    scheduled_action = "restart"
+    if args.action == "start":
+        scheduled_action = "start"
 
     # Stop all indirect dependencies on the now stopped containers:
     for container in reversed(restart_dependant_containers):
-        print_msg("stopping... (container depending on 1+ " +\
-            "restarted container(s))",
+        print_msg("stopping... (this container is depending on 1+ " +\
+            "of the container(s) scheduled for restart)",
             service=container.service.name, container=container.name,
             color="blue")
         LaunchThreaded.stop(container)
@@ -2119,7 +2328,8 @@ elif args.action == "start" or args.action == "restart":
     # Stop all regularly stopped containers:
     threads = list()
     for container in stop_containers:
-        print_msg("stopping... (for scheduled restart)",
+        print_msg("stopping... (this container was scheduled for " +\
+            scheduled_action + ")",
             service=container.service.name, container=container.name,
             color="blue")
         LaunchThreaded.stop(container)
@@ -2130,9 +2340,22 @@ elif args.action == "start" or args.action == "restart":
     while i < len(start_all):
         container = start_all[i]
         if container.running:
-            print_msg("already running.", service=container.service.name,\
-                container=container.name,
-                color="green")
+            if container in containers:
+                print_msg("already running. (this container was " +\
+                        "scheduled for " +\
+                        scheduled_action + ")",
+                    service=container.service.name,\
+                    container=container.name,
+                    color="green")
+            else:
+                print_msg("already running. (this container is " +\
+                        "a dependency of a container scheduled for " +\
+                        scheduled_action + ")",
+                    service=container.service.name,\
+                    container=container.name,
+                    color="green")
+            i += 1
+            continue
         if i < len(start_all) - 1:
             t = LaunchThreaded.attempt_launch(container,
                 failed_launch_tracker=tracker)
@@ -2157,7 +2380,10 @@ elif args.action == "stop":
         sys.exit(1)
     containers = TargetsParser.get_containers(" ".join(args.argument),
         print_error=True)
+    if containers == None:
+        sys.exit(1)
     for container in containers:
+        assert(container != None)
         if container.running:
             print_msg("stopping...", service=container.service.name,
                 container=container.name,
@@ -2197,6 +2423,6 @@ elif args.action == "snapshot":
     else:
         sys.exit(0)
 elif args.action == "clean":
-    clean_up()
+    Service.global_clean_up(args.force != True)
 else:
     unknown_action()

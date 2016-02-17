@@ -11,9 +11,12 @@ need a nice way to launch and manage all of these services in one go!
 ## Features
 
 - easily start/stop and manage multiple docker-compose controlled services
+  in one go
 
-- clean up all stopped containers in one go (useful if you rely purely on
-  images, docker-compose usually creates new containers when launching)
+- simple docker-compose.yml grouping of multiple containers to a service
+  for easier use
+
+- clean up all stopped containers and dangling unnamed volumes in one go
 
 - creation of atomic snapshots of all your read-write volumes/live data
   without shutting down or pausing your containers (for backup purposes)
@@ -30,11 +33,18 @@ Usage:
   docker-services.py list                - list all known services
   docker-services.py start <service>     - starts the specified service
   docker-services.py stop <service>      - stops the specified service
-  docker-services.py restart <service>   - restarts the given service      
+  docker-services.py restart <service>   - restarts the given service.
+                                           WARNING: the containers will
+                                           *always* get rebuilt and
+                                           recreated by this command.
+                                           All data in them outside of
+                                           volumes will be reset!!
   docker-services.py logs <service>      - print logs of all docker 
                                            containers of the service
-  docker-services.py shell <service> <subservice>  - run a shell in the
-                                                     specified subservice.
+  docker-services.py shell <service>[/<subservice>]  - run a shell in the
+                                                       specified
+                                                       subservice's
+                                                       container
   docker-services.py snapshot <service>  - makes a snapshot of the live
                                            data if enabled (optional)
   docker-services.py clean               - deletes all containers that
