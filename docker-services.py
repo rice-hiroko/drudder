@@ -437,7 +437,7 @@ def print_msg(text, service=None, container=None, color="blue"):
     elif color == "yellow":
         info_msg = "\033[1;33mWARNING"
     elif color == "green":
-        info_msg = "SUCESS"
+        info_msg = "SUCCESS"
 
     def color_code():
         part = "\033[1;"
