@@ -1712,7 +1712,7 @@ class Snapshots(object):
         if fs != "btrfs":
             return
 
-        btrfs_tool_check()
+        self.btrfs_tool_check()
 
         if os.path.exists(os.path.join(service_path, "livedata")):
             if not SystemInfo.is_btrfs_subvolume(os.path.join(
@@ -1725,7 +1725,8 @@ class Snapshots(object):
                         "Fix it by doing this:\n" + \
                         "1. Stop the service with: docker-services.py stop " +\
                             self.service.name + "\n" + \
-                        "2. Snapshot the service once with: docker-services.py "+\
+                        "2. Snapshot the service once with: " +\
+                            "docker-services.py "+\
                             "snapshot " + self.service.name + "\n",
                         service=self.service.name, color="yellow")
                     return
