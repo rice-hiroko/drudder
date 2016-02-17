@@ -1683,8 +1683,9 @@ class Snapshots(object):
     @staticmethod
     def btrfs_tool_check():
         # make sure the btrfs tool is working:
-        if SystemInfo.btrfs_path():
-            print_msg("error: btrfs tool not found. Are btrfs-progs installed?",
+        if SystemInfo.btrfs_path() == None:
+            print_msg("error: btrfs tool not found. " +\
+                "Are btrfs-progs installed?",
                 color="red")
             sys.exit(1)
         output = None
