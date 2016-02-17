@@ -417,9 +417,9 @@ def print_msg(text, service=None, container=None, color="blue"):
     """
     info_msg = "Info"
     if color == "red":
-        info_msg = "Error"
+        info_msg = "\033[1;31mError"
     elif color == "yellow":
-        info_msg = "Warning"
+        info_msg = "\033[1;33mWarning"
     elif color == "green":
         info_msg = "Success"
 
