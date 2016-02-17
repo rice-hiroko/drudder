@@ -415,13 +415,13 @@ def print_msg(text, service=None, container=None, color="blue"):
     """ Print out a nicely formatted message prefixed with
         [docker-services.py] and possibly a service name.
     """
-    info_msg = "Info"
+    info_msg = "INFO"
     if color == "red":
-        info_msg = "\033[1;31mError"
+        info_msg = "\033[1;31mERROR"
     elif color == "yellow":
-        info_msg = "\033[1;33mWarning"
+        info_msg = "\033[1;33mWARNING"
     elif color == "green":
-        info_msg = "Success"
+        info_msg = "SUCESS"
 
     def color_code():
         part = "\033[1;"
@@ -458,7 +458,7 @@ def print_msg(text, service=None, container=None, color="blue"):
     if color == "yellow" or color == "red":
         text_color += color_code()
     print("\033[0m\033[1m[\033[0m" + docker_services_part + \
-        service_part + "\033[0m\033[1m] " + info_msg.upper() +\
+        service_part + "\033[0m\033[1m] " + info_msg +\
         " " + text_color + \
         textwrap.fill(text, width=70,
             initial_indent=(" " * initial_length),
