@@ -1758,7 +1758,7 @@ class Snapshots(object):
                         return
             except RuntimeError:
                 print_msg("there was a problem. btrfs snapshotting won't " +\
-                          "work as intended." +\
+                          "work as intended.", \
                           service=self.service.name, color="red")
         # Everything seems fine so far.
         return
