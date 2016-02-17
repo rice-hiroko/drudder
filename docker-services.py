@@ -310,8 +310,8 @@ class SystemInfo(object):
 
     @staticmethod
     def docker_compose_path():
-        """ Locate docker-compose binary and return its path, or exit process with
-            error if not available.
+        """ Locate docker-compose binary and return its path, or exit process
+            with error if not available.
         """
         bin_path = SystemInfo.locate_binary("docker-compose")
         if bin_path != None:
@@ -322,10 +322,10 @@ class SystemInfo(object):
 
     @staticmethod
     def btrfs_path():
-        """ Locate btrfs helper tool binary and return its path, or return None if
-            not found.
+        """ Locate btrfs helper tool binary and return its path, or return
+            None if not found.
         """
-        bin_path = locate_binary("btrfs")
+        bin_path = SystemInfo.locate_binary("btrfs")
         if bin_path != None:
             return bin_path
         return None
