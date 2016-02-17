@@ -334,7 +334,8 @@ class SystemInfo(object):
     def get_fs_mount_root(path):
         if not os.path.exists(path):
             raise ValueError("given path does not exist: " + str(path))
-        output = subprocess.check_output([locate_binary("df"), path]).\
+        output = subprocess.check_output([
+            SystemInfo.locate_binary("df"), path]).\
             decode("utf-8", "ignore").strip()
 
         # Skip first line:
