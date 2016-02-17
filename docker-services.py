@@ -264,7 +264,7 @@ class SystemInfo(object):
             " You should probably do your snapshotting manually!!"
 
         # first, get the containing mount point:
-        mount = SystemVolume.get_fs_mount_root(os.path.normpath(path + "/../"))
+        mount = SystemInfo.get_fs_mount_root(os.path.normpath(path + "/../"))
 
         # get btrfs subvolume list:
         output = subprocess.check_output([locate_binary("btrfs"),
