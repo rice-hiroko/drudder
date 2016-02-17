@@ -58,6 +58,8 @@ freely, subject to the following restrictions:
                                                recreated by this command.
                                                All data in them outside of
                                                volumes will be reset!!
+      docker-services.py info <service>[/subservice] - show extended info
+                                                       about the service
       docker-services.py logs <service>      - print logs of all docker 
                                                containers of the service
       docker-services.py shell <service>[/<subservice>]  - run a shell in the
@@ -2258,7 +2260,7 @@ elif args.action == "rebuild":
                 "one or more of the specified " +\
                 "containers is/are currently running: " +\
                 str(", ".join([
-                    str(container) for container in containers]))
+                    str(container) for container in containers])),
                 color="red")
             print("docker-services.py: error: aborted rebuilding")
             sys.exit(1)
@@ -2482,6 +2484,63 @@ elif args.action == "snapshot":
         sys.exit(1)
     else:
         sys.exit(0)
+elif args.action == "info":
+    if len(args.argument) == 0:
+        print("docker-services.py: error: please specify the name " + \
+            "of the service to be snapshotted, or \"all\"", file=sys.stderr)
+        sys.exit(1)
+    containers = TargetsParser.get_containers(" ".join(args.argument),
+        print_error=True)
+    if containers == None:
+        sys.exit(1)
+    for container in containers:
+        print("--- Info for: " + str(container) + " ---")
+        print("  Canonical docker container name: " +\
+            container.default_container_name)
+        print("  Owning service info:")
+        print("    -- name: " + str(container.service.name))
+        print("    -- location: " + str(container.service.service_path))
+        print("  Running: " + str(container.running))
+        print("  Volume information:")
+        for volume in container.volumes:
+            got_vol_info = False
+            print("    Volume " + str(volume) + ":")
+            if volume.id != None:
+                got_vol_info = True
+                print("      Id: " + str(volume.id))
+            if volume.name != None:
+                got_vol_info = True
+                print("      Name: " + str(volume.name))
+            mounts = volume.mounts
+            if len(mounts) > 0:
+                got_vol_info = True
+                print("      Mounts:")
+                for mount in mounts:
+                    got_mount_info = False
+                    if mount.host_path != None:
+                        if not got_mount_info:
+                            sys.stdout.write("        - ")
+                        else:
+                            sys.stdout.write("          ")
+                        got_mount_info = True
+                        print("Host directory: " +\
+                            str(mount.host_path))
+                    if mount.mount_container_filesystem_path != None:
+                        if not got_mount_info:
+                            sys.stdout.write("        - ")
+                        else:
+                            sys.stdout.write("          ")
+                        got_info = True
+                        print("Mount path in container: " +\
+                            str(mount.mount_container_filesystem_path))
+                    if not got_info:
+                        if not got_mount_info:
+                            sys.stdout.write("        - ")
+                        else:
+                            sys.stdout.write("          ")
+                        print("<unknown mount>")
+            if not got_vol_info:
+                print("      <no info known>")
 elif args.action == "clean":
     Service.global_clean_up(args.force != True)
 else:
