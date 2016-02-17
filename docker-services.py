@@ -2240,7 +2240,7 @@ elif args.action == "rebuild":
     for container in containers:
         if container.running:
             print_msg("cannot safely rebuild, one of the specified " +\
-                "containers is running: " + str(containers),
+                "containers is running: " + str(" ".join(containers)),
                 color="red")
             print("docker-services.py: error: aborted rebuilding")
             sys.exit(1)
