@@ -415,6 +415,14 @@ def print_msg(text, service=None, container=None, color="blue"):
     """ Print out a nicely formatted message prefixed with
         [docker-services.py] and possibly a service name.
     """
+    info_msg = "Info"
+    if color == "red":
+        info_msg = "Error"
+    elif color == "yellow":
+        info_msg = "Warning"
+    elif color == "green":
+        info_msg = "Success"
+
     def color_code():
         part = "\033[1;"
         if color == "blue":
@@ -450,8 +458,9 @@ def print_msg(text, service=None, container=None, color="blue"):
     if color == "yellow" or color == "red":
         text_color += color_code()
     print("\033[0m\033[1m[\033[0m" + docker_services_part + \
-        service_part + "\033[0m\033[1m] " + text_color + \
-        textwrap.fill(text, 79,
+        service_part + "\033[0m\033[1m] " + info_msg.upper() +\
+        " " + text_color + \
+        textwrap.fill(text, width=70,
             initial_indent=(" " * initial_length),
             subsequent_indent=(" " * initial_length))[
             initial_length:] + \
@@ -2149,15 +2158,23 @@ if args.action != "snapshot":
 
 if args.action == "list" or args.action == "ps" or args.action == "status":
     all_services = Service.all()
-    print("Service list (" + str(len(all_services)) + " service(s)):")
+    print("\033[1mService list (" + str(len(all_services)) +\
+        " service(s)):\033[0m")
     for service in all_services:
         state = ""
-        if service.is_running():
+        running_names = service._get_running_service_container_names()
+        all_names = [container.name for container in service.containers]
+        if len(running_names) == len(all_names):
             state = "\033[1;32mrunning\033[0m"
+        elif len(running_names) > 0:
+            state = "\033[1;33mpartial (running: " +\
+                ", ".join(running_names) + ", not running: " +\
+                ", ".join([name for name in all_names\
+                    if name not in running_names]) + ")\033[0m"
         else:
             state = "\033[1;31mstopped\033[0m"
-        print("\033[0m\033[1m" + service.name + "\033[0m, in: " + \
-            service.service_path + ", state: " + state)
+        print("\033[0m  - \033[1m" + service.name + "\033[0m (" + \
+            service.service_path + "): " + state)
 elif args.action == "help":
     parser.print_help()
     sys.exit(1)
@@ -2225,9 +2242,9 @@ elif args.action == "shell":
         sys.exit(1)
     if len(containers) != 1:
         print("docker-services.py: error: this command can only be used " + \
-            "on a single container/service. It matches " + str(containers) +\
-            " containers: " +\
-            ", ".join([container.name for container in containers]),
+            "on a single container/service. It matches multiple " +\
+            "containers: " +\
+            ", ".join([str(container) for container in containers]),
             file=sys.stderr)
         sys.exit(1)
     if containers[0].running:
