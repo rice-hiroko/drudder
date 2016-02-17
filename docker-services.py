@@ -1750,7 +1750,7 @@ class Snapshots(object):
                         "needs conversion to btrfs subvolume.\n" +\
                         "Fix it by snapshotting it once with: " +\
                         "docker-services.py "+\
-                        "snapshot " + service_name + "\n",
+                        "snapshot " + self.service.name + "\n",
                         service=self.service.name, color="yellow")
                     return
         # Everything seems fine so far.
