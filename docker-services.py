@@ -627,7 +627,7 @@ class ServiceContainer(object):
     def __neq__(self, other):
         return not self.__eq__(other)
 
-    def launch(self):
+    def launch(self, force_container_recreation=False):
         if self.running:
             return
 
@@ -647,7 +647,13 @@ class ServiceContainer(object):
                 # Host mount specified in .yml -> we should be fine
                 continue
             potentially_lost_volumes.append(volume)
-        if len(potentially_lost_volumes) == 0:
+        if len(potentially_lost_volumes) == 0 or \
+                force_container_recreation:
+            if len(potentially_lost_volumes) > 0:
+                print_msg("some volumes might be potentially dangling, " +\
+                    "but container recreation was forced by user",
+                    service=self.service.name, container=self.name,
+                    color="yellow")
             subprocess.check_call([SystemInfo.docker_compose_path(),
                 "rm", "-f", self.name],
                 cwd=self.service.service_path)
@@ -1399,11 +1405,13 @@ class LaunchThreaded(threading.Thread):
         thread if it takes too long.
     """
     
-    def __init__(self, container, failed_launch_tracker=None):
+    def __init__(self, container, failed_launch_tracker=None,
+            force_container_recreation=False):
         super().__init__()
         self.container = container
         self.failed_launch_tracker = failed_launch_tracker
         self.path = self.container.service.service_path
+        self.force_container_recreation = force_container_recreation
 
     def run(self):
         try:
@@ -1465,7 +1473,8 @@ class LaunchThreaded(threading.Thread):
             print_msg("launching...", service=self.container.service.name,
                 container=self.container.name, color="blue")
             try:
-                self.container.launch()
+                self.container.launch(
+                    force_container_recreation=force_container_recreation)
                 time.sleep(1)
                 if not self.container.running:
                     print_msg("failed to launch. (nothing running after " +\
@@ -1500,7 +1509,7 @@ class LaunchThreaded(threading.Thread):
 
     @staticmethod
     def attempt_launch(container, to_background_timeout=5,
-            failed_launch_tracker=None):
+            failed_launch_tracker=None, force_container_recreation=False):
         """ Launch a given service and wait for it to run for a few seconds.
             If that isn't long enough for it to start running, return
             execution to possibly launch further services while this one is
@@ -2245,10 +2254,11 @@ elif args.action == "rebuild":
         sys.exit(1)
     for container in containers:
         if container.running:
-            print_msg("cannot safely rebuild, one or more of the " +\
-                "specified " +\
+            print_msg("cannot safely recreate container, " +\
+                "one or more of the specified " +\
                 "containers is/are currently running: " +\
-                str(", ".join([str(container) for container in containers])),
+                str(", ".join([
+                    str(container) for container in containers]))
                 color="red")
             print("docker-services.py: error: aborted rebuilding")
             sys.exit(1)
@@ -2406,11 +2416,13 @@ elif args.action == "start" or args.action == "restart":
             continue
         if i < len(start_all) - 1:
             t = LaunchThreaded.attempt_launch(container,
-                failed_launch_tracker=tracker)
+                failed_launch_tracker=tracker,
+                force_container_recreation=(args.force is True))
         else:
             t = LaunchThreaded.attempt_launch(container,
                 failed_launch_tracker=tracker,
-                to_background_timeout=None)
+                to_background_timeout=None,
+                force_container_recreation=(args.force is True))
         if t != None:
             threads.append(t)
         i += 1
