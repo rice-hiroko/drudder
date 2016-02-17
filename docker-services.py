@@ -882,7 +882,7 @@ class ServiceContainer(object):
         return self._get_volumes(rw_only=False)
 
     @property
-    def rw_only_volumes(self):
+    def rw_volumes(self):
         """ Returns a list of DataVolume instances representing all volumes
             which are in any sort of known connection to this container.
             Limited to all the volumes that are actually writable for the
@@ -1771,7 +1771,7 @@ class Snapshots(object):
         # Check which volumes this service has:
         rw_volumes = set()
         for container in self.service.containers:
-            for volume in container.rw_only_volumes:
+            for volume in container.rw_volumes:
                 rw_volumes.add(volume)
         rw_volumes = list(rw_volumes)
         if len(rw_volumes) == 0:
