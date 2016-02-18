@@ -282,6 +282,7 @@ class SystemInfo(object):
     def is_btrfs_subvolume(path):
         """ Check if the given path is a btrfs subvolume.
         """
+        path = os.path.realpath(path)
         nontrivial_error = "error: failed to map a btrs subvolume "+\
             "to its POSIX path. This seems to be a non-trivial setup."+\
             " You should do your snapshotting manually!!"
