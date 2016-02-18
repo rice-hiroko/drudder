@@ -1102,10 +1102,12 @@ class Service(object):
         """
         running_containers = []
         try:
+            env = os.environ.copy()
+            env["COLUMNS"] = 200
             output = subprocess.check_output([
                 SystemInfo.docker_compose_path(), "ps"],
                 cwd=self.service_path, stderr=subprocess.STDOUT,
-                timeout=10).\
+                timeout=10, env=env).\
                 decode("utf-8", "ignore")
         except subprocess.CalledProcessError as e:
             output = e.output.decode("utf-8", "ignore")
