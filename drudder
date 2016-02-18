@@ -1915,8 +1915,8 @@ class Snapshots(object):
             print_msg("error: snapshot already in progress. " +\
                 "try again later", service=self.service.name,
                 color="red")
-            print_msg("remove .docker-rudder-snapshot.lock if that is " +\
-                "incorrect", service=self.service.name)
+            print_msg("remove .docker-rudder-snapshot.lock if you " +\
+                "are sure that is incorrect", service=self.service.name)
             return False
 
         print_msg("considering for snapshot...",
@@ -1935,7 +1935,7 @@ class Snapshots(object):
         
         # Check if we have livedata/:
         if not os.path.exists(os.path.join(
-                self.service.name, "livedata")):
+                self.service.service_path, "livedata")):
             print_msg("error: service has read-write volumes, " + \
                 "but no livedata/ " +\
                 "folder. Fix this to enable snapshots",
@@ -1961,7 +1961,7 @@ class Snapshots(object):
                 relpath = os.path.relpath(
                     os.path.realpath(mount.host_path),
                     os.path.realpath(os.path.join(
-                    self.service.name, "livedata")),
+                    self.service.service_path, "livedata")),
                 )
                 if relpath.startswith(os.pardir + os.sep):
                     # This volume mount is not in livedata/!
@@ -1982,7 +1982,7 @@ class Snapshots(object):
 
         # Check if filesystem of livedata/ is actually btrfs:
         fs = SystemInfo.filesystem_type_at_path(
-            os.path.join(self.service.name, "livedata"))
+            os.path.join(self.service.service_path, "livedata"))
         if fs != "btrfs":
             print_msg("error: livedata/ has other filesystem " + str(fs) + \
                 ", should be btrfs!")
@@ -2002,14 +2002,25 @@ class Snapshots(object):
         # Make sure the livedata/ dir is a btrfs subvolume:    
         if self.service.is_running():
             if not SystemInfo.is_btrfs_subvolume(livedata_dir):
-                print_msg("error: can't do btrfs subvolume conversion because "+\
-                    "service is running. The first snapshot is required to " +\
+                print_msg("error: can't do btrfs subvolume " +\
+                    "conversion because "+\
+                    "service is running. The first snapshot is " +\
+                    "required to " +\
                     "be done when the service is stopped.",
                     service=self.service.name, color="red")
                 return False
 
         lock_path = os.path.join(self.service.service_path,
             ".docker-rudder-snapshot.lock")
+
+        # Check there is still no transaction running:
+        if self.check_running_snapshot_transaction():
+            print_msg("error: snapshot already in progress. " +\
+                "try again later", service=self.service.name,
+                color="red")
+            print_msg("remove .docker-rudder-snapshot.lock if you are " +\
+                "sure this is incorrect", service=self.service.name)
+            return False
 
         # Add a transaction lock:
         transaction_id = str(uuid.uuid4())
