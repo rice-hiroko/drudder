@@ -2347,7 +2347,9 @@ elif args.action == "shell":
         sys.exit(1)
     if len(containers) != 1:
         print("docker-rudder: error: this command can only be used " + \
-            "on a single container/service. It matches multiple " +\
+            "on a single container, but the given argument \"" +\
+            " ".join(args.argument) +\
+            "\" matches multiple " +\
             "containers: " +\
             ", ".join([str(container) for container in containers]),
             file=sys.stderr)
@@ -2549,7 +2551,8 @@ elif args.action == "snapshot":
 elif args.action == "info":
     if len(args.argument) == 0:
         print("docker-rudder: error: please specify the name " + \
-            "of the service to be snapshotted, or \"all\"", file=sys.stderr)
+            "of the service or container to print info for, " +\
+            "or \"all\"", file=sys.stderr)
         sys.exit(1)
     containers = TargetsParser.get_containers(" ".join(args.argument),
         print_error=True)
