@@ -93,6 +93,8 @@ Each service folder inside one of those locatoins should contain:
 - livedata/ subfolder where all read-write volumes are mounted to
                             (recommended, see snapshots as described below)
 
+To list all currently recognized services, type: `drudder list`
+
 Congratulations, you can now manage launch your service(s) with
 docker-rudder!
 
