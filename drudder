@@ -2253,7 +2253,7 @@ class TargetsParser(object):
         return list(result)
 
     @staticmethod
-    def get_services(self, print_error=False):
+    def get_services(targets, print_error=False):
         while targets.find("  ") >= 0:
             targets.replace("  ", " ")
         result = set()
