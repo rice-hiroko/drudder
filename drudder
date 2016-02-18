@@ -2266,11 +2266,12 @@ class TargetsParser(object):
                 for service in Service.all():
                     result.add(service)
                 return list(result)
-            service = Service.find_by_name(service_name)
+            service = Service.find_by_name(target.partition("/")[0])
             if service == None:
                 if print_error:
                     print("docker-rudder: error: " + \
-                        "no such service found: " + str(service_name),
+                        "no such service found: " + str(
+                        target.partition("/")[0]),
                         file=sys.stderr)
                 return None
             result.add(service)
