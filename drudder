@@ -182,6 +182,8 @@ freely, subject to the following restrictions:
 """ Copyright (C) Jonas Thiem et al., 2015-2016
 """
 
+TOOL_VERSION="0.1"
+
 import argparse
 from argparse import RawTextHelpFormatter, HelpFormatter
 import copy
@@ -1645,8 +1647,8 @@ class Permissions:
         return perm_dict
 
 parser = argparse.ArgumentParser(description=textwrap.dedent('''\
-    Docker Services: a launch helper when you got more than one
-    docker-compose.yml-powered container cloud that you need to power up.'''
+    docker-rudder: a tool to simply managing a larger collection of
+    docker-compose.yml-specified container groups.'''
     ),
     formatter_class=DoubleLineBreakFormatter)
 parser.add_argument("action",
@@ -1676,12 +1678,22 @@ parser.add_argument("action",
              docker images of course won't be touched. ''')
     )
 parser.add_argument("argument", nargs="*", help="argument(s) to given action")
+parser.add_argument("--version", help="show version and quit",
+    default=False, action="store_true",
+    dest="show_version")
 parser.add_argument("--force",
     default=False, action="store_true",
+    help="Can be used to override various safety warnings. Consult the "+\
+        "respective warning prompted by an action to understand the "+\
+        "consequences",
     dest="force")
 if len(" ".join(sys.argv[1:]).strip()) == 0:
     parser.print_help()
     sys.exit(1)
+for arg in sys.argv[1:]:
+    if arg == "--version" or arg == "-v" or arg == "-V":
+        print("docker-rudder version " + str(TOOL_VERSION))
+        sys.exit(0)
 args = parser.parse_args()
 
 ensure_docker = SystemInfo.docker_path()
