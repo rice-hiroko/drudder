@@ -1946,7 +1946,7 @@ class Snapshots(object):
         # Check if we have any volumes which are actually in livedata/:
         empty_snapshot = True
         for volume in rw_volumes:
-            for mount in volume:
+            for mount in volume.mounts:
                 if mount.container == None:
                     continue
                 if mount.container.service != self.service:
