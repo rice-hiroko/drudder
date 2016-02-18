@@ -145,7 +145,7 @@ How to enable snapshots for a service:
 service(s) at least once!**
 
 Calling:
-   ``` docker-rudder.py snapshot <service>|"all" ```
+   ``` drudder snapshot <service>|"all" ```
 
 will now use btrfs functionality to add a time-stamped folder with an
 atomic snapshot of livedata/ of the specified service(s) into a new
