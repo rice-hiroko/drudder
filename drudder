@@ -286,18 +286,20 @@ class SystemInfo(object):
             "to its POSIX path. This seems to be a non-trivial setup."+\
             " You should do your snapshotting manually!!"
 
-        # first, get the containing mount point:
+        # First, get the containing mount point:
         base_path = os.path.normpath(path + "/../")
         mount = SystemInfo.get_fs_mount_root(base_path)
         if mount == None:
             print("docker-rudder: warning: internal problem: " +\
                 "mount point of " +\
                 str(base_path) + " was returned as: None")
-            print_msg(nontrivial_error, color="red")
-            raise ValueError("cannot check path. mount point unknown: " +\
-                str(path))
+            details = "cannot check path. Mount point search failed: " +\
+                str(path)
+            print_msg(nontrivial_error + "\n\nError details: " + details,
+                color="red")
+            raise ValueError(details)
 
-        # get btrfs subvolume list:
+        # Get btrfs subvolume list:
         output = subprocess.check_output([
             SystemInfo.locate_binary("btrfs"),
             "subvolume", "list", path]).\
@@ -321,15 +323,21 @@ class SystemInfo(object):
                         SystemInfo.locate_binary("stat"),
                         "-c", "%i", path]).decode('utf-8', 'ignore').strip()
                 except subprocess.CalledProcessError as e:
-                    # stat failed, although btrfs subvolume list lists it!
-                    print_msg(nontrivial_error, color="red")
-                    raise ValueError("failed to stat btrfs volume: " +\
-                        str(path))
+                    # Stat failed, although btrfs subvolume list lists it!
+                    details = "btrfs volume listed by btrfs tool " +\
+                        "cannot be stat'ed: " + str(path)
+                    print_msg(nontrivial_error + "\n\nError details: " +\
+                        details, color="red")
+                    raise ValueError(details)
                 if output != "256":
-                    # not a subvolume, although btrfs subvolume list lists it!
-                    print_msg(nontrivial_error, color="red")
-                    raise ValueError("btrfs volume doesn't appear to be " +\
-                        "an actual btrfs volume: " + str(path))
+                    # Not a subvolume, although btrfs subvolume list lists it!
+                    details = "btrfs volume listed by btrfs tool " +\
+                        "doesn't appear to be " +\
+                        "an actual btrfs volume according to stat: " +\
+                         str(path)
+                    print_msg(nontrivial_error + "\n\nError details: " +\
+                        details, color="red")
+                    raise ValueError(details)
                 return True
         try:
             output = subprocess.check_output([
@@ -338,9 +346,13 @@ class SystemInfo(object):
         except subprocess.CalledProcessError as e:
             pass
         if output == "256":
-            # stat says it's a subvolume, although we don't think it is!
-            print_msg(nontrivial_error, color="red")
-            sys.exit(1)
+            # Stat says it's a subvolume, although we don't think it is!
+            details = "stat reports path as btrfs volume, but " +\
+                "we didn't detect respective entry from btrfs tool: " +\
+                str(path)
+            print_msg(nontrivial_error + "\n\nError details: " + \
+                details, color="red")
+            raise ValueError(details)
         return False
 
 
@@ -498,14 +510,28 @@ def print_msg(text, service=None, container=None, color="blue"):
     text_color = "\033[0m"
     if color == "yellow" or color == "red":
         text_color += color_code()
-    print("\033[0m\033[1m[\033[0m" + docker_services_part + \
+
+    # Split lines according to \n\n:
+    lines = [line.strip() for line in text.split("\n\n")]
+
+    # First line with complicated lead up:
+    print_text = "\033[0m\033[1m[\033[0m" + docker_services_part + \
         service_part + "\033[0m\033[1m] " + info_msg +\
-        " " + text_color + \
-        textwrap.fill(text, width=70,
-            initial_indent=(" " * initial_length),
-            subsequent_indent=(" " * initial_length))[
-            initial_length:] + \
-        "\033[0m")
+        " " + text_color
+    first_line = True
+    for line in lines:
+        if first_line:
+            print_text += textwrap.fill(line, width=70,
+                initial_indent=(" " * initial_length),
+                subsequent_indent=(" " * initial_length))[
+                initial_length:]
+            first_line = False
+        else:
+            print_text += "\n" + textwrap.fill(line, width=70,
+                initial_indent=(" " * initial_length),
+                subsequent_indent=(" " * initial_length))
+    print_text += "\033[0m"
+    print(print_text)
 
 class DataVolumeMount(object):
     def __init__(self, host_path=None,
