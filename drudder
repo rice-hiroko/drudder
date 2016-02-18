@@ -1089,7 +1089,10 @@ class Service(object):
                     container_name):
                 if matched_name != None:
                     raise RuntimeError("encountered unexpected non-unique " +\
-                        "container label")
+                        "container label trying to find the full name for "+\
+                         "\"" + str(container_name) + "\": variant A: " +\
+                        str(matched_name) + ", variant B: " +\
+                        str(container.name))
                 matched_name = container.name
         return matched_name
 
