@@ -1,22 +1,26 @@
 
 # What is this
 
+
 ## Motivation
 
-You have multiple complex services, each consisting of 1+ Dockerfiles
-and its docker-compose.yml which launches it. You suddenly discover you
-need a nice way to launch and manage all of these services in one go!
+**docker-rudder** is a tool which operates on top of docker and
+docker-compose. It doesn't add any notable new features (other than btrfs
+snapshot handling): instead it tries to offer a well-thought-out interface
+to simplify all the required daily tasks needed for managing your docker
+containers.
+
+It unifies some tasks requiring multiple commands with the regular docker
+interfaces in single quick commands with sensible defaults and satefy
+checks.
 
 
 ## Features
 
-- easily start/stop and manage multiple docker-compose controlled services
-  in one go
+- easily start/stop and manage multiple docker-compose controlled
+  services in one go
 
-- simple docker-compose.yml grouping of multiple containers to a service
-  for easier use
-
-- clean up all stopped containers and dangling unnamed volumes in one go
+- clean up all stopped containers and dangling volumes
 
 - creation of atomic snapshots of all your read-write volumes/live data
   without shutting down or pausing your containers (for backup purposes)
@@ -25,78 +29,90 @@ need a nice way to launch and manage all of these services in one go!
 
 **This script is an alpha status. Expect some bugs and problems.**
 
+
+
 # Basic usage
 
 Usage:
 
 ```
-  docker-services.py list                - list all known services
-  docker-services.py start <service>     - starts the specified service
-  docker-services.py stop <service>      - stops the specified service
-  docker-services.py restart <service>   - restarts the given service.
-                                           WARNING: the containers will
-                                           *always* get rebuilt and
-                                           recreated by this command.
-                                           All data in them outside of
-                                           volumes will be reset!!
-  docker-services.py logs <service>      - print logs of all docker 
-                                           containers of the service
-  docker-services.py shell <service>[/<subservice>]  - run a shell in the
-                                                       specified
-                                                       subservice's
-                                                       container
-  docker-services.py snapshot <service>  - makes a snapshot of the live
-                                           data if enabled (optional)
-  docker-services.py clean               - deletes all containers that
-                                           aren't running (IRREVOCABLE)
+  drudder list                - list all known services
+  drudder start <service>     - starts the specified service
+  drudder stop <service>      - stops the specified service
+  drudder restart <service>   - restarts the given service.
+                                **WARNING**: the containers will *always*
+                                get rebuilt and recreated by this command
+                                (unless this would result in dangling
+                                volumes).
+                                All data in the containers outside of
+                                volumes will be reset!
+  drudder rebuild <service>   - force rebuild of the service from the
+                                newest Dockerfile and/or image. Please note
+                                this is only required if you want to force
+                                a rebuild from the ground up, the (re)start
+                                actions will already update the container 
+                                if any of the relevant Dockerfiles were
+                                changed.
+  drudder info <service>[/subservice] - show extended info about the
+                                        service
+  drudder logs <service>      - print logs of all docker containers of the
+                                service
+  drudder shell <service>[/<subservice>]  - run a shell in the specified
+                                            subservice's container
+  drudder snapshot <service>  - makes a snapshot of the live data if
+                                enabled. (optional) This feature requires
+                                btrfs
+  drudder clean               - deletes all containers that aren't running
+                                and all dangling volumes
 ```
 
-**Hint**: You can always use "all" as service target.
+**Hint**: You can always use "all" as service target if you want to apply
+an action to all services on your machine.
 
 
 
 # Installation
 
-Copy docker-services.py to /usr/bin/ and set execution bit (chmod +x)
+Copy the drudder script to /usr/bin/ and set execution bit (chmod +x)
 
 
 
 # HOW TO add your service
 
-Services are organized in subfolders. The script will scan the following
-locations for services folders:
+docker-rudder expects services grouped with docker-compose /
+docker-compose.yml. The script will scan the following locations for
+services subfolders with a docker-compose.yml in them:
 
 - the current working directory when running the script
-- ~/.docker-services/
 - /usr/share/docker-services/  
+- /srv
 
-Each service folder should contain:
+Each service folder inside one of those locatoins should contain:
 
-- Dockerfile(s) + required misc data. (possibly in subfolders as needed)
-- livedata/ folder for all read-write volumes (recommended, see snapshots
-                                               as described below)
 - docker-compose.yml to launch it. (folders without this file are skipped)
+- livedata/ subfolder where all read-write volumes are mounted to
+                            (recommended, see snapshots as described below)
 
-  (why the docker-compose.yml? Because your service most likely requires
-  persistant volumes mounted and ports forwarded, which a Dockerfile can't
-  specify in detail by design)
-
-Congratulations, you can now launch your service(s)!
+Congratulations, you can now manage launch your service(s) with
+docker-rudder!
 
 
 
 # HOW TO backup
 
-You should backup all your services. This will be easy since you can
-simply copy your whole services folder.
+You should backup all your services. docker-rudder provides snapshot
+functionality to help with this. While you could simply copy your service
+folder with all the mounted volumes in it, this can lead to corrupt copies
+when doing this while some services are operating (SQL databases etc.).
 
-However, to get your live data (SQL databases etc.) backed up properly
-during operations, make sure to:
+To use docker-rudder snapshots of your writable volumes during service
+operation, do this:
 
 1. Enable snapshots as described below
 
-2. Always run "docker-services.py snapshot all" before you make your
-   backup.
+2. Always run "docker-rudder snapshot all" before you make your backup
+   to get consistent snapshots of your writable volumes in a subfolder
+   named livedata-snapshpots/ in each respective service folder.
 
 
 
@@ -110,6 +126,7 @@ The snapshots will be atomic, therefore they should be suitable even for
 database realtime operations while the database is running and writing to
 the volume(s).
 
+
 ## Enable it for a service
 
 How to enable snapshots for a service:
@@ -118,6 +135,7 @@ How to enable snapshots for a service:
 
 2. Each of your snapshot enabled services needs to have a subfolder
    livedata/ where all read-write volumes of it are located.
+
 
 ## Test/do it
 
@@ -132,6 +150,7 @@ atomic snapshot of livedata/ of the specified service(s) into a new
 livedata-snapshots/ subfolder - while your service can continue using the
 volume thanks to btrfs' copy-on-write snapshot functionality.
 
+
 ## Restore a snapshot
 
 You can easily restore such a snapshot by shutting down your service
@@ -140,5 +159,5 @@ service back on.
 
 
 
-Copyright (C) Jonas Thiem, 2015
+Copyright (C) Jonas Thiem et al., 2015-2016
 

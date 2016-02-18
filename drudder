@@ -23,19 +23,26 @@ freely, subject to the following restrictions:
 """
     # What is this
 
+
     ## Motivation
 
-    You have multiple complex services, each consisting of 1+ Dockerfiles
-    and its docker-compose.yml which launches it. You suddenly discover you
-    need a nice way to launch and manage all of these services in one go!
+    **docker-rudder** is a tool which operates on top of docker and
+    docker-compose. It doesn't add any notable new features (other than btrfs
+    snapshot handling): instead it tries to offer a well-thought-out interface
+    to simplify all the required daily tasks needed for managing your docker
+    containers.
+
+    It unifies some tasks requiring multiple commands with the regular docker
+    interfaces in single quick commands with sensible defaults and satefy
+    checks.
 
 
     ## Features
 
-    - easily start/stop and manage multiple docker-compose controlled services
+    - easily start/stop and manage multiple docker-compose controlled
+      services in one go
 
-    - clean up all stopped containers in one go (useful if you rely purely on
-      images, docker-compose usually creates new containers when launching)
+    - clean up all stopped containers and dangling volumes
 
     - creation of atomic snapshots of all your read-write volumes/live data
       without shutting down or pausing your containers (for backup purposes)
@@ -49,76 +56,83 @@ freely, subject to the following restrictions:
     Usage:
 
     ```
-      docker-services.py list                - list all known services
-      docker-services.py start <service>     - starts the specified service
-      docker-services.py stop <service>      - stops the specified service
-      docker-services.py restart <service>   - restarts the given service.
-                                               WARNING: the containers will
-                                               *always* get rebuilt and
-                                               recreated by this command.
-                                               All data in them outside of
-                                               volumes will be reset!!
-      docker-services.py info <service>[/subservice] - show extended info
-                                                       about the service
-      docker-services.py logs <service>      - print logs of all docker 
-                                               containers of the service
-      docker-services.py shell <service>[/<subservice>]  - run a shell in the
-                                                           specified
-                                                           subservice's
-                                                           container
-      docker-services.py snapshot <service>  - makes a snapshot of the live
-                                               data if enabled (optional)
-      docker-services.py clean               - deletes all containers that
-                                               aren't running and all dangling
-                                               volumes !! (IRREVOCABLE)
+      drudder list                - list all known services
+      drudder start <service>     - starts the specified service
+      drudder stop <service>      - stops the specified service
+      drudder restart <service>   - restarts the given service.
+                                    **WARNING**: the containers will *always*
+                                    get rebuilt and recreated by this command
+                                    (unless this would result in dangling
+                                    volumes).
+                                    All data in the containers outside of
+                                    volumes will be reset!
+      drudder rebuild <service>   - force rebuild of the service from the
+                                    newest Dockerfile and/or image. Please note
+                                    this is only required if you want to force
+                                    a rebuild from the ground up, the (re)start
+                                    actions will already update the container 
+                                    if any of the relevant Dockerfiles were
+                                    changed.
+      drudder info <service>[/subservice] - show extended info about the
+                                            service
+      drudder logs <service>      - print logs of all docker containers of the
+                                    service
+      drudder shell <service>[/<subservice>]  - run a shell in the specified
+                                                subservice's container
+      drudder snapshot <service>  - makes a snapshot of the live data if
+                                    enabled. (optional) This feature requires
+                                    btrfs
+      drudder clean               - deletes all containers that aren't running
+                                    and all dangling volumes
     ```
 
-    **Hint**: You can always use "all" as service target.
+    **Hint**: You can always use "all" as service target if you want to apply
+    an action to all services on your machine.
 
 
 
     # Installation
 
-    Copy docker-services.py to /usr/bin/ and set execution bit (chmod +x)
+    Copy the drudder script to /usr/bin/ and set execution bit (chmod +x)
 
 
 
     # HOW TO add your service
 
-    Services are organized in subfolders. The script will scan the following
-    locations for services folders:
-    
+    docker-rudder expects services grouped with docker-compose /
+    docker-compose.yml. The script will scan the following locations for
+    services subfolders with a docker-compose.yml in them:
+
     - the current working directory when running the script
-    - ~/.docker-services/
-    - /usr/share/docker-services/  
- 
-    Each service folder should contain:
+    - /usr/share/docker-services/
+    - /srv
 
-    - Dockerfile(s) + required misc data. (possibly in subfolders as needed)
-    - livedata/ folder for all read-write volumes (recommended, see snapshots
-                                                   as described below)
+    Each service folder inside one of those locatoins should contain:
+
     - docker-compose.yml to launch it. (folders without this file are skipped)
+    - livedata/ subfolder where all read-write volumes are mounted to
+                                (recommended, see snapshots as described below)
 
-      (why the docker-compose.yml? Because your service most likely requires
-      persistant volumes mounted and ports forwarded, which a Dockerfile can't
-      specify in detail by design)
-
-    Congratulations, you can now launch your service(s)!
+    Congratulations, you can now manage launch your service(s) with
+    docker-rudder!
 
 
 
     # HOW TO backup
 
-    You should backup all your services. This will be easy since you can
-    simply copy your whole services folder.
-   
-    However, to get your live data (SQL databases etc.) backed up properly
-    during operations, make sure to:
+    You should backup all your services. docker-rudder provides snapshot
+    functionality to help with this. While you could simply copy your service
+    folder with all the mounted volumes in it, this can lead to corrupt copies
+    when doing this while some services are operating (SQL databases etc.).
+
+    To use docker-rudder snapshots of your writable volumes during service
+    operation, do this:
 
     1. Enable snapshots as described below
 
-    2. Always run "docker-services.py snapshot all" before you make your
-       backup.
+    2. Always run "docker-rudder snapshot all" before you make your backup
+       to get consistent snapshots of your writable volumes in a subfolder
+       named livedata-snapshpots/ in each respective service folder.
 
 
 
@@ -132,6 +146,7 @@ freely, subject to the following restrictions:
     database realtime operations while the database is running and writing to
     the volume(s).
 
+
     ## Enable snapshots for a specific service
 
     How to enable snapshots for a service:
@@ -141,18 +156,20 @@ freely, subject to the following restrictions:
     2. Each of your snapshot enabled services needs to have a subfolder
        livedata/ where all read-write volumes of it are located.
 
+
     ## Test/do it
 
     **Before you go into production, make sure to test snapshots for your
     service(s) at least once!**
 
     Calling:
-       ``` docker-services.py snapshot <service>|"all" ```
+       ``` docker-rudder snapshot <service>|"all" ```
   
     will now use btrfs functionality to add a time-stamped folder with an
     atomic snapshot of livedata/ of the specified service(s) into a new
     livedata-snapshots/ subfolder - while your service can continue using the
     volume thanks to btrfs' copy-on-write snapshot functionality.
+
 
     ## Restore a snapshot
 
@@ -162,7 +179,7 @@ freely, subject to the following restrictions:
 
 """
 
-""" Copyright (C) Jonas Thiem, 2015
+""" Copyright (C) Jonas Thiem et al., 2015-2016
 """
 
 import argparse
@@ -254,7 +271,7 @@ class SystemInfo(object):
                 continue
             if behaves_like_docker(bin_path):
                 return bin_path
-        print("docker-services.py: error: no docker found. Is it installed?")
+        print("docker-rudder: error: no docker found. Is it installed?")
         sys.exit(1)
     
     @staticmethod
@@ -269,7 +286,7 @@ class SystemInfo(object):
         base_path = os.path.normpath(path + "/../")
         mount = SystemInfo.get_fs_mount_root(base_path)
         if mount == None:
-            print("docker-services.py: warning: internal problem: " +\
+            print("docker-rudder: warning: internal problem: " +\
                 "mount point of " +\
                 str(base_path) + " was returned as: None")
             print_msg(nontrivial_error, color="red")
@@ -329,7 +346,7 @@ class SystemInfo(object):
         bin_path = SystemInfo.locate_binary("docker-compose")
         if bin_path != None:
             return bin_path
-        print("docker-services.py: error: no docker-compose found. " + \
+        print("docker-rudder: error: no docker-compose found. " + \
             "Is it installed?")
         sys.exit(1)
 
@@ -431,7 +448,7 @@ class SystemInfo(object):
 
 def print_msg(text, service=None, container=None, color="blue"):
     """ Print out a nicely formatted message prefixed with
-        [docker-services.py] and possibly a service name.
+        [docker-rudder] and possibly a service name.
     """
     info_msg = "INFO"
     if color == "red":
@@ -463,9 +480,9 @@ def print_msg(text, service=None, container=None, color="blue"):
 
     docker_services_part = ""
     if service == None or len(service) == 0:
-        docker_services_part = color_code() + "docker-services.py"
+        docker_services_part = color_code() + "docker-rudder"
 
-    initial_length = len("[docker-services.py")
+    initial_length = len("[docker-rudder")
     if service != None:
         initial_length = len("[" + service)
         if container != None:
@@ -1014,10 +1031,7 @@ class Service(object):
                     continue
                 services.append(Service(f, 
                     os.path.normpath(os.path.join(d, f))))
-        if os.path.exists(os.path.join(os.path.expanduser("~"),
-                ".docker-services")):
-            scan_dir(os.path.join(os.path.expanduser("~"),
-                    ".docker-services"))
+        scan_dir(os.getcwd())
         if os.path.exists("/usr/share/docker-services"):
             scan_dir("/usr/share/docker-services")
         if os.path.exists("/srv"):
@@ -1250,7 +1264,7 @@ class Service(object):
                 "with --force)\n\n" +\
                 "Are you sure you want to continue? [Enter y/N]")
             if not answer == "y" and not answer == "Y":
-                print("docker-services.py: error: cleaning was aborted "+\
+                print("docker-rudder: error: cleaning was aborted "+\
                     "by user.", file=sys.stderr)
                 sys.exit(1)
         print_msg("cleaning up stopped containers...")
@@ -1689,7 +1703,7 @@ def verify_service_names(names):
                 found = service
                 break
         if found == None:
-            print("docker-services.py: error: no such service found: " +\
+            print("docker-rudder: error: no such service found: " +\
                 specified_service, file=sys.stderr)
             sys.exit(1)
         specified_services.append(found)
@@ -1701,24 +1715,24 @@ class Snapshots(object):
 
     def check_running_snapshot_transaction(self):
         if os.path.exists(os.path.join(
-                self.service.service_path, ".docker-services-snapshot.lock")):
+                self.service.service_path, ".docker-rudder-snapshot.lock")):
             output = subprocess.check_output(
-                "ps aux | grep docker-services | grep -v grep | wc -l",
+                "ps aux | grep docker-rudder | grep -v grep | wc -l",
                 shell=True).decode("utf-8", "ignore")
             if output.strip() != "1":
-                # another copy still running??
+                # Another copy still running??
                 return True
             print_msg("warning: stale snapshot lock found but no process " +\
                 "appears to be left around, removing.",
                 color="yellow", service=self.service.name)
-            # no longer running, remove file:
+            # No longer running, remove file:
             os.remove(os.path.join(self.service.service_path,
-                ".docker-services-snapshot.lock"))
+                ".docker-rudder-snapshot.lock"))
         return False
 
     @staticmethod
     def btrfs_tool_check():
-        # make sure the btrfs tool is working:
+        # Make sure the btrfs tool is working:
         if SystemInfo.btrfs_path() == None:
             print_msg("error: btrfs tool not found. " +\
                 "Are btrfs-progs installed?",
@@ -1762,11 +1776,11 @@ class Snapshots(object):
                             "still need to be converted to a subvolume to " +\
                             "enable snapshots.\n" + \
                             "Fix it by doing this:\n" + \
-                            "1. Stop the service with: docker-services.py "+\
+                            "1. Stop the service with: docker-rudder "+\
                                 "stop " +\
                                 self.service.name + "\n" + \
                             "2. Snapshot the service once with: " +\
-                                "docker-services.py "+\
+                                "docker-rudder "+\
                                 "snapshot " + self.service.name + "\n",
                             service=self.service.name, color="yellow")
                         return
@@ -1774,7 +1788,7 @@ class Snapshots(object):
                         print_msg("the livedata/ dir of this service still " +\
                             "needs conversion to btrfs subvolume.\n" +\
                             "Fix it by snapshotting it once with: " +\
-                            "docker-services.py "+\
+                            "docker-rudder "+\
                             "snapshot " + self.service.name + "\n",
                             service=self.service.name, color="yellow")
                         return
@@ -2100,7 +2114,7 @@ class TargetsParser(object):
             service = Service.find_by_name(service_name)
             if service == None:
                 if print_error:
-                    print("docker-services.py: error: " + \
+                    print("docker-rudder: error: " + \
                         "no such service found: " + str(service_name),
                         file=sys.stderr)
                 return None
@@ -2121,7 +2135,7 @@ class TargetsParser(object):
                 # Check if the container was found by name or not:
                 if len(containers) == 0:
                     if print_error:
-                        print("docker-services.py: error: " + \
+                        print("docker-rudder: error: " + \
                             "no such container for service \"" +\
                             str(service_name) + "\" found: " +\
                             str(container_name),
@@ -2149,7 +2163,7 @@ class TargetsParser(object):
             service = Service.find_by_name(service_name)
             if service == None:
                 if print_error:
-                    print("docker-services.py: error: " + \
+                    print("docker-rudder: error: " + \
                         "no such service found: " + str(service_name),
                         file=sys.stderr)
                 return None
@@ -2157,10 +2171,10 @@ class TargetsParser(object):
         return list(result)
 
 def unknown_action(hint=None):
-    """ Print an error that the given action to docker-services.py is invalid,
+    """ Print an error that the given action to docker-rudder is invalid,
         with a possible hint to suggest another action.
     """
-    print("docker-services.py: error: unknown action: " + \
+    print("docker-rudder: error: unknown action: " + \
         args.action, file=sys.stderr)
     if hint != None:
         print("Did you mean: " + str(hint) + "?")
@@ -2177,31 +2191,31 @@ if error_output != None:
     # Old-style error message:
     if error_output.find("dial unix") >= 0 and \
             error_output.find("no such file or directory") >= 0:
-        print("docker-services.py: error: " + \
+        print("docker-rudder: error: " + \
             "docker daemon appears to be not running." +\
             " Please start it and ensure it is reachable.")
         sys.exit(1)
     # Newer error message:
     elif error_output.find("Cannot connect to the Docker daemon") >= 0:
-        print("docker-services.py: error: " + \
+        print("docker-rudder: error: " + \
             "docker daemon appears to be not running." +\
             " Please start it and ensure it is reachable.")
         sys.exit(1)
     else:
-        print("docker-services.py: error: " + \
+        print("docker-rudder: error: " + \
             "there appears to be some unknown problem with " + \
             "docker! (test run of \"docker ps\" returned error code)")
         sys.exit(1)
 
 # Check if services are btrfs ready, and give warning if not:
-if args.action != "snapshot":
+if args.action != "snapshot" and args.action != "info":
     for service in Service.all():
         snapshots = Snapshots(service)
         snapshots.subvolume_readiness_check()
 
 # --- Main handling of actions here:
 
-if args.action == "list" or args.action == "ps" or args.action == "status":
+if args.action == "list":
     all_services = Service.all()
     print("\033[1mService list (" + str(len(all_services)) +\
         " service(s)):\033[0m")
@@ -2225,7 +2239,7 @@ elif args.action == "help":
     sys.exit(1)
 elif args.action == "logs":
     if len(args.argument) == 0:
-        print("docker-services.py: error: please specify the name " + \
+        print("docker-rudder: error: please specify the name " + \
             "of the service for which docker logs shold be printed, "+\
             "or \"all\"", file=sys.stderr)
         sys.exit(1)
@@ -2251,7 +2265,7 @@ elif args.action == "logs":
             pass
 elif args.action == "rebuild":
     if len(args.argument) == 0:
-        print("docker-services.py: error: please specify the name " + \
+        print("docker-rudder: error: please specify the name " + \
             "of the service for which an interactive shell should be started",
             file=sys.stderr)
         sys.exit(1)
@@ -2267,7 +2281,7 @@ elif args.action == "rebuild":
                 str(", ".join([
                     str(container) for container in containers])),
                 color="red")
-            print("docker-services.py: error: aborted rebuilding")
+            print("docker-rudder: error: aborted rebuilding")
             sys.exit(1)
     for container in containers:
         print_msg("rebuilding container with no cache",
@@ -2280,7 +2294,7 @@ elif args.action == "rebuild":
     sys.exit(0)
 elif args.action == "shell":
     if len(args.argument) == 0:
-        print("docker-services.py: error: please specify the name " + \
+        print("docker-rudder: error: please specify the name " + \
             "of the service for which an interactive shell should be started",
             file=sys.stderr)
         sys.exit(1)
@@ -2289,7 +2303,7 @@ elif args.action == "shell":
     if containers == None:
         sys.exit(1)
     if len(containers) != 1:
-        print("docker-services.py: error: this command can only be used " + \
+        print("docker-rudder: error: this command can only be used " + \
             "on a single container/service. It matches multiple " +\
             "containers: " +\
             ", ".join([str(container) for container in containers]),
@@ -2315,7 +2329,7 @@ elif args.action == "shell":
             image_name, "/bin/bash"], cwd=containers[0].service.service_path)
 elif args.action == "start" or args.action == "restart":
     if len(args.argument) == 0:
-        print("docker-services.py: error: please specify the name " + \
+        print("docker-rudder: error: please specify the name " + \
             "of the service to be started, or \"all\"", file=sys.stderr)
         sys.exit(1)
     containers = TargetsParser.get_containers(" ".join(args.argument),
@@ -2347,7 +2361,7 @@ elif args.action == "start" or args.action == "restart":
                 try:
                     dep_container = dep.container
                 except ValueError:
-                    print("docker-services.py: error: dependency for " +\
+                    print("docker-rudder: error: dependency for " +\
                         str(container) + " is not in known services, " +\
                         "can't resolve dependency chain: " +\
                         str(dep), file=sys.stderr)
@@ -2435,14 +2449,14 @@ elif args.action == "start" or args.action == "restart":
         i += 1
     LaunchThreaded.wait_for_launches(threads)
     if len(tracker) > 0:
-        print("docker-services.py: error: some launches failed.",
+        print("docker-rudder: error: some launches failed.",
             file=sys.stderr)
         sys.exit(1)
     else:
         sys.exit(0)
 elif args.action == "stop":
     if len(args.argument) == 0:
-        print("docker-services.py: error: please specify the name " + \
+        print("docker-rudder: error: please specify the name " + \
             "of the service to be stopped, or \"all\"", file=sys.stderr)
         sys.exit(1)
     containers = TargetsParser.get_containers(" ".join(args.argument),
@@ -2466,7 +2480,7 @@ elif args.action == "stop":
     sys.exit(0)
 elif args.action == "snapshot":
     if len(args.argument) == 0:
-        print("docker-services.py: error: please specify the name " + \
+        print("docker-rudder: error: please specify the name " + \
             "of the service to be snapshotted, or \"all\"", file=sys.stderr)
         sys.exit(1)
     services = TargetsParser.get_services(" ".join(args.argument),
@@ -2484,14 +2498,14 @@ elif args.action == "snapshot":
         if not snapshots.do():
             return_error = True
     if return_error:
-        print("docker-services.py: error: some snapshots failed.",
+        print("docker-rudder: error: some snapshots failed.",
             file=sys.stderr)
         sys.exit(1)
     else:
         sys.exit(0)
 elif args.action == "info":
     if len(args.argument) == 0:
-        print("docker-services.py: error: please specify the name " + \
+        print("docker-rudder: error: please specify the name " + \
             "of the service to be snapshotted, or \"all\"", file=sys.stderr)
         sys.exit(1)
     containers = TargetsParser.get_containers(" ".join(args.argument),
