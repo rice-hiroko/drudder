@@ -105,7 +105,7 @@ freely, subject to the following restrictions:
 
     - the current working directory when running the script
     - /usr/share/docker-services/
-    - /srv
+    - /srv/
 
     Each service folder inside one of those locatoins should contain:
 
@@ -1821,7 +1821,7 @@ class Snapshots(object):
             print_msg("error: snapshot already in progress. " +\
                 "try again later", service=self.service.name,
                 color="red")
-            print_msg("remove .docker-services-snapshot.lock if that is " +\
+            print_msg("remove .docker-rudder-snapshot.lock if that is " +\
                 "incorrect", service=self.service.name)
             return False
 
@@ -1915,7 +1915,7 @@ class Snapshots(object):
                 return False
 
         lock_path = os.path.join(self.service.service_path,
-            ".docker-services-snapshot.lock")
+            ".docker-rudder-snapshot.lock")
 
         # Add a transaction lock:
         transaction_id = str(uuid.uuid4())

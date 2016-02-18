@@ -85,7 +85,7 @@ services subfolders with a docker-compose.yml in them:
 
 - the current working directory when running the script
 - /usr/share/docker-services/  
-- /srv
+- /srv/
 
 Each service folder inside one of those locatoins should contain:
 
@@ -143,7 +143,7 @@ How to enable snapshots for a service:
 service(s) at least once!**
 
 Calling:
-   ``` docker-services.py snapshot <service>|"all" ```
+   ``` docker-rudder.py snapshot <service>|"all" ```
 
 will now use btrfs functionality to add a time-stamped folder with an
 atomic snapshot of livedata/ of the specified service(s) into a new
