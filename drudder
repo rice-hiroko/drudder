@@ -323,11 +323,13 @@ class SystemInfo(object):
                 except subprocess.CalledProcessError as e:
                     # stat failed, although btrfs subvolume list lists it!
                     print_msg(nontrivial_error, color="red")
-                    sys.exit(1)
+                    raise ValueError("failed to stat btrfs volume: " +\
+                        str(path))
                 if output != "256":
                     # not a subvolume, although btrfs subvolume list lists it!
                     print_msg(nontrivial_error, color="red")
-                    sys.exit(1)
+                    raise ValueError("btrfs volume doesn't appear to be " +\
+                        "an actual btrfs volume: " + str(path))
                 return True
         try:
             output = subprocess.check_output([
