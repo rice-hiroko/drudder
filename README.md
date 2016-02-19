@@ -27,7 +27,7 @@ checks.
 
 - one self-contained file
 
-**This script is an alpha status. Expect some bugs and problems.**
+**This script is in an experimental state. Expect some bugs and problems.**
 
 
 
