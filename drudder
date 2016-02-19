@@ -189,6 +189,7 @@ TOOL_VERSION="0.1"
 import argparse
 from argparse import RawTextHelpFormatter, HelpFormatter
 import base64
+from collections import OrderedDict
 import copy
 import datetime
 import json
@@ -1757,6 +1758,9 @@ parser.add_argument("action",
 
     "restart": restart the service specified as argument (or "all" for all).
 
+    "status": show more detailed status of the given service (or "all for
+              all).
+
     "logs": output the logs of all the docker containers of the service
             specified as argument (or "all" for all).
 
@@ -1769,7 +1773,14 @@ parser.add_argument("action",
                 specified as argument (from livedata/) in livedata-snapshots/
 
     "clean": clean up all stopped containers. THIS IS NOT REVERSIBLE. The
-             docker images of course won't be touched. ''')
+             docker images of course won't be touched.
+
+    "dump-container-info" : dump all sorts of detailed container info as YAML.
+                            Mainly useful if you want to process the combined
+                            data computed by docker-rudder with another tool
+                            of yours.
+    ''')
+
     )
 parser.add_argument("argument", nargs="*", help="argument(s) to given action")
 parser.add_argument("--version", help="show version and quit",
@@ -2295,6 +2306,161 @@ class TargetsParser(object):
             result.add(service)
         return list(result)
 
+class ContainerLinkDependencyNode(object):
+    def __init__(self, container, incoming_links, outgoing_links, graph):
+        self.incoming_links = incoming_links
+        self.outgoing_links = outgoing_links
+        self.container = container
+        self.graph = graph
+
+    def __hash__(self):
+        return hash(str(self.container.name))
+
+    def __eq__(self, other):
+        if other == None:
+            return False
+        if not hasattr(other, "container") or \
+                not hasattr(other, "incoming_links") or \
+                not hasattr(other, "outgoing_links") or \
+                not hasattr(other, "graph"):
+            return False
+        if other.container == self.container and other.graph == self.graph:
+            return True
+        return False
+
+    def __neq__(self, other):
+        return not self.__eq__(other)
+
+    def fulfills_dependencies(self, containers):
+        nodes = [self.graph[container] for container in running_containers]
+        for outgoing_link in self.outgoing_links:
+            if not outgoing_link in nodes:
+                return False
+        return True
+
+    def is_depending_on(self, containers):
+        nodes = [self.graph[container] for container in running_containers]
+        for outgoing_link in self.outgoing_links:
+            if outgoing_link in nodes:
+                return True
+        return False
+
+    def is_dependency_of(self, containers):
+        nodes = [self.graph[container] for container in running_containers]
+        for incoming_link in self.outgoing_links:
+            if incoming_link in nodes:
+                return True
+        return False
+
+class DoAlongDependencyEdges(object):
+    def __init__(self, dependency_resolution_object,
+            initial_containers, reverse_yield_order=False,
+            along_incoming=False, expand_initial_set=False):
+        self.reverse_yield_order = False
+        self.along_incoming = False
+        self.graph = dependency_resolution_object.graph
+        self.start_set = set()
+        for container in initial_containers:
+            self.start_set.add(self.graph[container])
+        self.marked_done = set()
+        self.marked_failed = set()
+        self.failed_yielded = set()
+
+    def _walk_along(self, nodes):
+        result = set()
+        for node in nodes:
+            if self.along_incoming == True:
+                for other_node in nodes.incoming_links:
+                    result.add(other_node)
+            else:   
+                for other_node in nodes.outgoing_links:
+                    result.add(other_node)
+
+    def mark_success(self, container):
+        self.marked_done.add(container)
+
+    def mark_failure(self, container):
+        self.marked_failed.add(container)
+
+    def next(self):
+        if False:
+            yield item
+        return
+
+    def next_failure(self):
+        if False:
+            yield item
+        return
+
+class ContainerLinkDependencyResolution(object):
+    def __init__(self, containers):
+        self.containers = containers
+        self.graph = dict()
+
+        # Add all containers as nodes without arcs:
+        for container in self.containers:
+            if not container in self.graph:
+                self.graph[container] = ContainerLinkDependencyNode(
+                    container, [], [], self.graph)
+
+        # Go through containers again and add arcs:
+        for container in self.containers:
+            source_node = self.graph[container]
+            for dependency in container.dependencies:
+                dep_container = None
+                try:
+                    dep_container = dep.container
+                except ValueError:
+                    print("docker-rudder: error: dependency for " +\
+                        str(container) + " is not in known services, " +\
+                        "can't resolve dependency chain: " +\
+                        str(dep), file=sys.stderr)
+                    sys.exit(1)
+                target_node = self.graph[dep_container]
+                if not target_node in source_node.incoming_links:
+                    source_node.outgoing_links.append(target_node)
+                if not source_node in target_node.outgoing_links:
+                    target_node.incoming_links.append(source_node)
+
+class ContainerStatusInfo(object):
+    def __init__(self, container):
+        self.container = container
+
+    def get(self, ordered=False):
+        dict_class = dict
+        if ordered:
+            dict_class = OrderedDict
+        info = dict_class()
+        info["Canonical docker container name"] = container.default_container_name 
+        info["Owning service info"] = OrderedDict()
+        info["Owning service info"]["Name"] = container.service.name
+        info["Owning service info"]["Location"] = container.service.service_path
+        info["Running"] = container.running
+        info["Volume information"] = list()
+        for volume in self.container.volumes:
+            vol_info = dict_class()
+            if volume.id != None:
+                vol_info["Id"] = str(volume.id)
+            if volume.name != None:
+                vol_info["Name"] = volume.name
+                vol_info["Unnamed"] = False
+            else:
+                vol_info["Unnamed"] = True
+            vol_info["Specified in YAML"] = volume.specified_in_yml
+            mounts = volume.mounts
+            if len(mounts) > 0:
+                vol_info["Mounts"] = list()
+                for mount in mounts:
+                    mount_info = dict_class() 
+                    if mount.host_path != None:
+                        mount_info["Host mount path"] = mount.host_path
+                    if mount.mount_container_filesystem_path != None:
+                        mount_info["Container mount path"] =\
+                            mount.mount_container_filesystem_path
+                    vol_info["Mounts"].append(mount_info)
+            info["Volume information"].append(vol_info)
+        return info
+
 def unknown_action(hint=None):
     """ Print an error that the given action to docker-rudder is invalid,
         with a possible hint to suggest another action.
@@ -2466,81 +2632,88 @@ elif args.action == "start" or args.action == "restart":
     if len(containers) == 0:
         sys.exit(0)
 
-    # This will hold all the containers that need to be (re)started including
-    # the dependencies they need themselves:
-    stop_containers = list()
-    if args.action == "restart":
-        stop_containers = copy.copy(containers)
-    start_containers = copy.copy(containers)
-
-    # This will hold all the containers depending on the restarted ones that
-    # also need to be restarted as a consequence:
-    restart_dependant_containers = list()
-    
-    # Collect dependencies of the containers to be (re)started to ensure they
-    # will be started too:
-    list_changed = True
-    while list_changed:
-        list_changed = False
-        for container in containers:
-            for dep in container.dependencies:
-                dep_container = None
-                try:
-                    dep_container = dep.container
-                except ValueError:
-                    print("docker-rudder: error: dependency for " +\
-                        str(container) + " is not in known services, " +\
-                        "can't resolve dependency chain: " +\
-                        str(dep), file=sys.stderr)
-                    sys.exit(1)
-                if not dep_container in start_containers:
-                    start_containers = [ dep_container ] + start_containers
-                    list_changed = True
-
-    # Collect services depending on the containers that are restarted in the
-    # process, so they can be restarted too:
-    list_changed = True
-    while list_changed:
-        list_changed = False
-        for service in Service.all():
-            for container in service.containers:
-                for stopped_container in (stop_containers +\
-                        restart_dependant_containers):
-                    for dep in container.dependencies:
-                        dep_container = None
-                        try:
-                            dep_container = dep.container
-                        except ValueError:
-                            pass
-                        if dep_container == stopped_container and \
-                                not container in stop_containers:
-                            if not container in restart_dependant_containers:
-                                list_changed = True
-                                restart_dependant_containers.append(container)
+    resolution = ContainerLinkDependencyResolution(
+        [container for container in service.containers\
+            for service in Services.all()])
 
     tracker = FailedLaunchTracker()
     scheduled_action = "restart"
     if args.action == "start":
         scheduled_action = "start"
 
-    # Stop all indirect dependencies on the now stopped containers:
-    for container in reversed(restart_dependant_containers):
-        print_msg("stopping... (this container is depending on 1+ " +\
-            "of the container(s) scheduled for restart)",
-            service=container.service.name, container=container.name,
-            color="blue")
-        LaunchThreaded.stop(container)
+    # Stop all indirect dependencies and the containers themselves:
+    restart_dependencies = set()
+    if scheduled_action == "restart":
+        stop_before_restart = \
+            DoAlongDependencyEdges(resolution, containers,
+            along_incoming_edges=True, reverse_yield_order=True)
+        for container in stop_before_restart.next():
+            if not container in containers:
+                print_msg("stopping... (this container is depending on 1+ " +\
+                    "of the container(s) scheduled for restart)",
+                    service=container.service.name, container=container.name,
+                    color="blue")
+                restart_dependencies.add(container)
+            else:
+                print_msg("stopping... (this container was scheduled for " +\
+                    scheduled_action + ")",
+                    service=container.service.name, container=container.name,
+                    color="blue")
+            LaunchThreaded.stop(container)
+            stop_before_restart.mark_success(container)
 
-    # Stop all regularly stopped containers:
-    threads = list()
-    for container in stop_containers:
-        print_msg("stopping... (this container was scheduled for " +\
+    # Helper function to launch a service:
+    threads = []
+    def start_container(container, is_last=False):
+        container = start_all[i]
+        if container.running:
+            if container in containers:
+                print_msg("already running. (this container was " +\
+                        "scheduled for " +\
+                        scheduled_action + ")",
+                    service=container.service.name,\
+                    container=container.name,
+                    color="green")
+            else:
+                print_msg("already running. (this container is " +\
+                        "a dependency of a container scheduled for " +\
+                        scheduled_action + ")",
+                    service=container.service.name,\
+                    container=container.name,
+                    color="green")
+            return
+        if not is_last:
+            t = LaunchThreaded.attempt_launch(container,
+                failed_launch_tracker=tracker,
+                force_container_recreation=(args.force is True))
+        else:
+            t = LaunchThreaded.attempt_launch(container,
+                failed_launch_tracker=tracker,
+                to_background_timeout=None,
+                force_container_recreation=(args.force is True))
+        if t != None:
+            threads.append(t)
+
+    # Start the dependencies of our container launch set:
+    start_dependency_containers = \
+        DoAlongDependencyEdges(resolution, containers,
+        along_incoming_edges=False, reverse_yield_order=False,
+        expand_initial_set=True)
+    for container in start_dependency_containers:
+        print_msg("already running. (this container is " +\
+            "a dependency of a container scheduled for " +\
             scheduled_action + ")",
-            service=container.service.name, container=container.name,
-            color="blue")
-        LaunchThreaded.stop(container)
+            service=container.service.name,\
+            container=container.name,
+            color="green")
 
     # Start everything again:
+    start_containers = \
+        DoAlongDependencyEdges(resolution, set(containers) +\
+            restart_dependencies,
+        along_incoming_edges=False, reverse_yield_order=False,
+        expand_initial_set=False)
+    
     start_all = start_containers + restart_dependant_containers
     i = 0
     while i < len(start_all):
@@ -2630,7 +2803,9 @@ elif args.action == "snapshot":
         sys.exit(1)
     else:
         sys.exit(0)
-elif args.action == "info":
+elif args.action == "status":
+    pass    
+elif args.action == "dump-container-info":
     if len(args.argument) == 0:
         print("docker-rudder: error: please specify the name " + \
             "of the service or container to print info for, " +\
@@ -2641,88 +2816,35 @@ elif args.action == "info":
     if containers == None:
         sys.exit(1)
     for container in containers:
-        print("# --- Info for: " + str(container) + " ---")
-        print(str(container) + ":")
-        print("  Canonical docker container name: " +\
-            container.default_container_name)
-        print("  Owning service info:")
-        print("    Name: " + str(container.service.name))
-        print("    Location: " + str(container.service.service_path))
-        print("  Running: " + str(container.running))
-        print("  Volume information:")
-        for volume in container.volumes:
-            got_vol_info = False
-            if volume.id != None:
-                if not got_vol_info:
-                    sys.stdout.write("  - ")
-                else:
-                    sys.stdout.write("    ")
-                got_vol_info = True
-                print("Id: " + str(volume.id))
-            if volume.name != None:
-                if not got_vol_info:
-                    sys.stdout.write("  - ")
-                else:
-                    sys.stdout.write("    ")
-                got_vol_info = True
-                print("Name: " + str(volume.name))
-                print("    Unnamed: false")
+        info = ContainerStatusInfo(container).get(ordered=True)
+        print("# --- Container: " + str(container))
+        print(str(container).replace("/", "_") + ":")
+        def serialize(item, indent=2):
+            t = ""
+            if isinstance(item, dict) or isinstance(item, OrderedDict):
+                for k in item:
+                    t = t + " " * indent + k + ":"
+                    t2 = serialize(item[k], indent=2)
+                    if t2.find("\n") >= 0:
+                        if t2.endswith("\n"):
+                            t2 = t2[:-1]
+                        t = t + "\n" + \
+                            "\n".join([" " * (indent) + line for line in \
+                            t2.split("\n")]) + "\n"
+                    else:
+                        t = t + " " + t2[2:] + "\n"
+            elif isinstance(item, list):
+                for value in item:
+                    t2 = serialize(value, indent=(indent))
+                    t2 = t2.lstrip()
+                    if t2.endswith("\n"):
+                        t2 = t2[:-1]
+                    t = t + "- " +\
+                        t2 + "\n"
             else:
-                if not got_vol_info:
-                    sys.stdout.write("  - ")
-                else:
-                    sys.stdout.write("    ")
-                got_vol_info = True
-                print("Unnamed: true")
-            if volume.specified_in_yml:
-                if not got_vol_info:
-                    sys.stdout.write("  - ")
-                else:
-                    sys.stdout.write("    ")
-                got_vol_info = True
-                print("Specified in YAML: true")
-            else:
-                if not got_vol_info:
-                    sys.stdout.write("  - ")
-                else:
-                    sys.stdout.write("    ")
-                got_vol_info = True
-                print("Specified in YAML: false")
-            mounts = volume.mounts
-            if len(mounts) > 0:
-                if not got_vol_info:
-                    sys.stdout.write("  - ")
-                else:
-                    sys.stdout.write("    ")
-                got_vol_info = True
-                print("Mounts:")
-                for mount in mounts:
-                    got_mount_info = False
-                    if mount.host_path != None:
-                        if not got_mount_info:
-                            sys.stdout.write("    - ")
-                        else:
-                            sys.stdout.write("      ")
-                        got_mount_info = True
-                        print("Host mount path: " +\
-                            str(mount.host_path))
-                    if mount.mount_container_filesystem_path != None:
-                        if not got_mount_info:
-                            sys.stdout.write("    - ")
-                        else:
-                            sys.stdout.write("      ")
-                        got_mount_info = True
-                        print("Container mount path: " +\
-                            str(mount.mount_container_filesystem_path))
-                    if not got_mount_info:
-                        sys.stdout.write("    - ")
-                        print("<unknown mount>")
-            if not got_vol_info:
-                if not got_vol_info:
-                    sys.stdout.write("  - ")
-                else:
-                    sys.stdout.write("    ")
-                print("<no info known>")
+                return " " * indent + str(item)
+            return t
+        print(serialize(info))
 elif args.action == "clean":
     Service.global_clean_up(args.force != True)
 else:
