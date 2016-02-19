@@ -2208,6 +2208,7 @@ class Snapshots(object):
         assert(not os.path.exists(snapshot_dir))
         print_msg("snapshot complete.", service=self.service.name,
             color="green")
+        return True
 
 class TargetsParser(object):
     @staticmethod
