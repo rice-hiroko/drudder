@@ -503,7 +503,7 @@ class SystemInfo(object):
             if get_parent == os.path.normpath(path) or path == "/":
                 # We are already at the root.
                 return None
-            return filesystem_type_at_path(os.path.normpath(path + "/../"))
+            return SystemInfo.filesystem_type_at_path(os.path.normpath(path + "/../"))
 
         output = subprocess.check_output([
             SystemInfo.locate_binary("mount")]).\
