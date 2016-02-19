@@ -503,7 +503,7 @@ class SystemInfo(object):
             if get_parent == os.path.normpath(path) or path == "/":
                 # We are already at the root.
                 return None
-            return filesystem_type_at_path(os.path.normpath(path + "/../"))
+            return SystemInfo.filesystem_type_at_path(os.path.normpath(path + "/../"))
 
         output = subprocess.check_output([
             SystemInfo.locate_binary("mount")]).\
@@ -2208,6 +2208,13 @@ class Snapshots(object):
         assert(not os.path.exists(snapshot_dir))
         print_msg("snapshot complete.", service=self.service.name,
             color="green")
+
+        # Remove lock file:
+        assert(os.path.exists(lock_path) and not os.path.isdir(lock_path))
+        os.remove(lock_path)
+        assert(not os.path.exists(lock_path))
+
+        return True
 
 class TargetsParser(object):
     @staticmethod
