@@ -2208,6 +2208,12 @@ class Snapshots(object):
         assert(not os.path.exists(snapshot_dir))
         print_msg("snapshot complete.", service=self.service.name,
             color="green")
+
+        # Remove lock file:
+        assert(os.path.exists(lock_path) and not os.path.isdir(lock_path))
+        os.remove(lock_path)
+        assert(not os.path.exists(lock_path))
+
         return True
 
 class TargetsParser(object):
