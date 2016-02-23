@@ -196,7 +196,9 @@ import json
 import multiprocessing
 import os
 import pty
+import queue
 import subprocess
+import random
 import re
 import shutil
 import sys
@@ -314,8 +316,8 @@ class SystemInfo(object):
 
     @staticmethod
     def docker_path():
-        """ Locate docker binary and return its path, or exit process with error
-            if not available.
+        """ Locate docker binary and return its path, or exit process with
+            error if not available.
         """
         if SystemInfo.__cached_docker_path != None:
             return SystemInfo.__cached_docker_path
@@ -504,7 +506,8 @@ class SystemInfo(object):
             if get_parent == os.path.normpath(path) or path == "/":
                 # We are already at the root.
                 return None
-            return SystemInfo.filesystem_type_at_path(os.path.normpath(path + "/../"))
+            return SystemInfo.filesystem_type_at_path(os.path.normpath(
+                path + "/../"))
 
         output = subprocess.check_output([
             SystemInfo.locate_binary("mount")]).\
@@ -1107,6 +1110,14 @@ class Service(object):
         return None
 
     @staticmethod
+    def all_containers():
+        result = set()
+        for service in Service.all():
+            for container in service.containers:
+                result.add(container)
+        return list(result)
+
+    @staticmethod
     def all():
         """ Get a global list of all detected services.
         """
@@ -1347,8 +1358,9 @@ class Service(object):
 
     @staticmethod
     def global_clean_up(ask=True):
-        """ This function will check the status of all docker containers, and then
-            irrevocably delete all containers that aren't running.
+        """ This function will check the status of all docker containers, and
+            then irrevocably delete all containers that aren't running.
+            It will also delete all dangling volumes.
         """
         if ask:
             answer = input("\033[1m!! DANGER !!\033[0m\n"+\
@@ -1365,7 +1377,8 @@ class Service(object):
                     "by user.", file=sys.stderr)
                 sys.exit(1)
         print_msg("cleaning up stopped containers...")
-        output = subprocess.check_output([SystemInfo.docker_path(), "ps", "-a"])
+        output = subprocess.check_output([
+            SystemInfo.docker_path(), "ps", "-a"])
         output = output.decode("utf-8", "ignore").\
             replace("\r", "\n").\
             replace("\n ", "\n").replace(" \n", "\n").replace("\n\n", "\n")
@@ -1392,7 +1405,8 @@ class Service(object):
                 parts = parts[:4] + [ '' ] + parts[4:]
             if parts[4] == "" or parts[4].startswith("Exited "):
                 print_msg("deleting stopped container " + parts[0] + "...")
-                subprocess.check_output([SystemInfo.docker_path(), "rm", parts[0]])
+                subprocess.check_output([SystemInfo.docker_path(),
+                    "rm", parts[0]])
         print_msg("cleaning up unneeded images...")
         subprocess.check_output([SystemInfo.docker_path(), "rmi",
             "$(docker images -aq"], shell=True)
@@ -1403,7 +1417,8 @@ class Service(object):
             vol = vol.strip()
             if len(vol) == 0:
                 continue
-            subprocess.check_output([SyStemInfo.docker_path(), "volume", "rm", vol])
+            subprocess.check_output([SyStemInfo.docker_path(),
+                "volume", "rm", vol])
 
     @property
     def containers(self):
@@ -1538,15 +1553,11 @@ class LaunchThreaded(threading.Thread):
             if ("owner" in perm_info["livedata-permissions"]) \
                     and os.path.exists(os.path.join(
                         self.path, "livedata")):
-                #print_msg("ensuring file permissions of livedata folder...",\
-                #    service=self.container.service.name,
-                #    container=self.container.name,
-                #        color="blue")
                 owner = perm_info["livedata-permissions"]["owner"]
                 try:
                     owner = int(owner)
                 except TypeError:
-                    # must be a name.
+                    # Must be a username.
                     try:
                         owner = getpwnam(owner).pw_uid
                     except KeyError:
@@ -1565,11 +1576,6 @@ class LaunchThreaded(threading.Thread):
                 if not dependency.container.running:
                     if not waiting_msg:
                         waiting_msg = True
-                        #print_msg("waiting for dependency to launch: " +\
-                        #    str(dependency),
-                        #    service=self.container.service.name,
-                        #    container=self.container.name,
-                        #    color="yellow")
                     time.sleep(5)
                     while not dependency.container.running:
                         if self.failed_launch_tracker != None:
@@ -1643,11 +1649,6 @@ class LaunchThreaded(threading.Thread):
         launch_t.join(to_background_timeout)
         if launch_t.isAlive():
             # This took too long, run in background:
-            #print_msg("Maximum waiting time exceeded, " + \
-            #    "resuming launch in background.",
-            #    service=container.service.name,
-            #    container=container.name,
-            #    color="yellow")
             return launch_t
         return None
 
@@ -1871,14 +1872,14 @@ class Snapshots(object):
             print_msg("Full btrfs tool output was: " + str(output))
             sys.exit(1)
 
-    def subvolume_readiness_check(self):
+    def subvolume_readiness_check(self, print_errors=True):
         """ Check if the given service is ready for snapshotting or still needs
             btrfs subvolume conversion. Print a warning if not.
         """
         fs = SystemInfo.filesystem_type_at_path(
             self.service.service_path)
         if fs != "btrfs":
-            return
+            return False
 
         self.btrfs_tool_check()
 
@@ -1889,32 +1890,36 @@ class Snapshots(object):
                         self.service.service_path, "livedata"))\
                         and len(self.service.rw_volumes) > 0:
                     if self.service.is_running():
-                        print_msg("the livedata/ dir of this service will " +\
-                            "still need to be converted to a subvolume to " +\
-                            "enable snapshots.\n" + \
-                            "Fix it by doing this:\n" + \
-                            "1. Stop the service with: docker-rudder "+\
-                                "stop " +\
-                                self.service.name + "\n" + \
-                            "2. Snapshot the service once with: " +\
+                        if print_errors:
+                            print_msg(
+                                "the livedata/ dir of this service will " +\
+                                "still need to be converted to " +\
+                                "a subvolume to enable snapshots.\n" + \
+                                "Fix it by doing this:\n" + \
+                                "1. Stop the service with: docker-rudder "+\
+                                    "stop " +\
+                                    self.service.name + "\n" + \
+                                "2. Snapshot the service once with: " +\
+                                    "docker-rudder "+\
+                                    "snapshot " + self.service.name + "\n",
+                                service=self.service.name, color="yellow")
+                    else:
+                        if print_errors:
+                            print_msg("the livedata/ dir of " +\
+                                "this service still " +\
+                                "needs conversion to btrfs subvolume.\n" +\
+                                "Fix it by snapshotting it once with: " +\
                                 "docker-rudder "+\
                                 "snapshot " + self.service.name + "\n",
-                            service=self.service.name, color="yellow")
-                        return
-                    else:
-                        print_msg("the livedata/ dir of this service still " +\
-                            "needs conversion to btrfs subvolume.\n" +\
-                            "Fix it by snapshotting it once with: " +\
-                            "docker-rudder "+\
-                            "snapshot " + self.service.name + "\n",
-                            service=self.service.name, color="yellow")
-                        return
+                                service=self.service.name, color="yellow")
+                    return False
             except ValueError:
                 print_msg("there was a problem. btrfs snapshotting won't " +\
                           "work as intended.", \
                           service=self.service.name, color="red")
+                return False
         # Everything seems fine so far.
-        return
+        return True
 
     def do(self):
         """ Make a backup of the live data of the service. """
@@ -2313,6 +2318,12 @@ class ContainerLinkDependencyNode(object):
         self.container = container
         self.graph = graph
 
+    def __repr__(self):
+        return "<ContainerLinkDependencyNode " + str(self.container) +\
+            " (" +\
+            ", ".join([str(self.container) + " -> " + str(link.container)\
+                for link in self.outgoing_links]) + ")>"
+
     def __hash__(self):
         return hash(str(self.container.name))
 
@@ -2324,7 +2335,9 @@ class ContainerLinkDependencyNode(object):
                 not hasattr(other, "outgoing_links") or \
                 not hasattr(other, "graph"):
             return False
-        if other.container == self.container and other.graph == self.graph:
+        if other.container == self.container:
+            if other.graph != self.graph:
+                return False
             return True
         return False
 
@@ -2353,46 +2366,216 @@ class ContainerLinkDependencyNode(object):
         return False
 
 class DoAlongDependencyEdges(object):
+    """ This helper class operates on the graph provided by a
+        ContainerLinkDependencyResolution object.
+
+        It constructs a subgraph according to the following rules:
+
+        - the graph will be made of the specified initial_containers list,
+          and then gradually grown along all the outgoing edges or,
+          alternatively with along_incoming=True, along all the incoming
+          edges to the maximum extent
+
+        You can then yield containers in this subgraph in the partial order
+        laid out by the connections it was grown along, starting with the root
+        nodes, then their children, etc.
+
+        This allows you to apply a function to all yielded containers in
+        order, e.g. launching them.
+
+        See the iterators DoAlongDependencyEdges.unprocessed_containers() or
+        DoAlongDependencyEdges.failed_containers() for details on how the
+        containers of this subgraph can be yielded.
+    """
     def __init__(self, dependency_resolution_object,
             initial_containers, reverse_yield_order=False,
             along_incoming=False, expand_initial_set=False):
+        self.access_lock = threading.Lock()
+
         self.reverse_yield_order = False
-        self.along_incoming = False
+        self.along_incoming = along_incoming
         self.graph = dependency_resolution_object.graph
         self.start_set = set()
         for container in initial_containers:
             self.start_set.add(self.graph[container])
         self.marked_done = set()
         self.marked_failed = set()
-        self.failed_yielded = set()
+        self.yielded_nodes = set()
+        self.yielded_failed_nodes = set()
 
-    def _walk_along(self, nodes):
-        result = set()
-        for node in nodes:
-            if self.along_incoming == True:
-                for other_node in nodes.incoming_links:
-                    result.add(other_node)
-            else:   
-                for other_node in nodes.outgoing_links:
-                    result.add(other_node)
+        # Grow to the relevant subgraph:
+        expand_queue = queue.Queue()
+        self.subgraph = {}
+        for container in initial_containers:
+            self.subgraph[container] = self.graph[container]
+            expand_queue.put(self.subgraph[container])
+        while not expand_queue.empty():
+            expand_node = expand_queue.get()
+            expanded_nodes = []
+            if along_incoming:
+                expanded_nodes = expand_node.incoming_links
+            else:
+                expanded_nodes = expand_node.outgoing_links
+            for expanded_node in expanded_nodes:
+                if not expanded_node.container in self.subgraph:
+                    self.subgraph[expanded_node.container] = expanded_node
+                    expand_queue.put(expanded_node)
+
+    def __iter__(self):
+        return self
+
+    def get_next_candidates(self):
+        # Get root nodes:
+        start_nodes = set()
+        for node in self.subgraph.values():
+            if self.along_incoming:
+                if len([node for node in node.outgoing_links\
+                        if node in self.subgraph.values()]) == 0:
+                    start_nodes.add(node)
+            else:
+                if len([node for node in node.incoming_links\
+                        if node in self.subgraph.values()]) == 0:
+                    start_nodes.add(node)
+        if len(start_nodes) == 0:
+            raise RuntimeError("invalid graph, no root nodes present")
+
+        # Prepare some stuff for gradually crawling the graph:
+        examine_queue = queue.Queue()
+        def get_successors(node):
+            if self.along_incoming:
+                return node.incoming_links
+            else:
+                return node.outgoing_links
+        for node in start_nodes:
+            examine_queue.put(node)
+
+        # Start advancing through graph to next unprocessed nodes:
+        seen = set()
+        candidates = []
+        while not examine_queue.empty():
+            next_node = examine_queue.get()
+            if not next_node in self.marked_done and \
+                    not next_node in self.marked_failed:
+                candidates.append(next_node)
+            else:
+                if not next_node in self.marked_failed:
+                    for successor in get_successors(next_node):
+                        if not successor in seen:
+                            seen.add(successor)
+                            examine_queue.put(successor)
+
+        # Get random item from list:   
+        return candidates
 
     def mark_success(self, container):
-        self.marked_done.add(container)
+        self.marked_done.add(self.graph[container])
 
     def mark_failure(self, container):
-        self.marked_failed.add(container)
+        self.marked_failed.add(self.graph[container])
 
-    def next(self):
-        if False:
-            yield item
-        return
+    def _next_unprocessed_node(self):
+        self.access_lock.acquire()
+        candidates = self.get_next_candidates()
+        actual_candidates = []
+        for candidate in candidates:
+            if not candidate in self.yielded_nodes:
+                actual_candidates.append(candidate)
+        if len(actual_candidates) == 0:
+            self.access_lock.release()
+            return None
+        yielded_node = random.choice(actual_candidates)
+        self.yielded_nodes.add(yielded_node)
+        result = yielded_node
+        self.access_lock.release()
+        return result
 
-    def next_failure(self):
-        if False:
-            yield item
-        return
+    def _all_nodes_processed(self):
+        result = True
+        self.access_lock.acquire()
+        for node in self.subgraph.values():
+            if not node in self.marked_failed and \
+                    not node in self.marked_done:
+                print("FOUND UNPROCESSED NODE: " + str(node))
+                print("marked_done: " + str(self.marked_done))
+                result = False
+                break
+        self.access_lock.release()
+        return result
+
+    def unprocessed_containers(self):
+        """ This function returns an iterator which yields the items according
+            to the order specified in the DoAlongDependencyEdges class
+            description.
+
+            However, it introduces two additional criteria (while maintaing
+            the order implicated by the subgraph):
+
+            - a container can only be yielded as soon as all the direct
+              predecessors are marked as "succeeded" with mark_success().
+
+            - all containers where any direct or indirect predecessors were
+              marked as "failed" with mark_failure() will be ignored and not
+              yielded at all.
+
+            If containers cannot be yielded because the first criterion
+            isn't fulfilled and they weren't discarded through the second
+            criterion yet and if all containers that could have been yielded
+            so far have been yielded, the iterator will hang and wait for
+            this situation to be resolved through further mark_success()/
+            mark_failure() calls.
+
+            As a result, this iterator will eventually hang unless you make
+            sure to eventually mark all returned items with "mark_success" or
+            "mark_failure". If you fail to do that, the iterator will remain
+            stuck.
+        """
+
+        class UnprocessedContainersIterator(object):
+            def __init__(self, doalongobj):
+                self.doalongobj = doalongobj
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                node = self.doalongobj._next_unprocessed_node()
+                while node == None and \
+                        not self.doalongobj._all_nodes_processed():
+                    time.sleep(0.2)
+                    node = self.doalongobj._next_unprocessed_node()
+                if node == None:
+                    raise StopIteration
+                return node.container
+        return UnprocessedContainersIterator(self)
+
+    def failed_containers(self):
+        """ This function returns an iterator which yields containers
+            in no particular order which fulfill the following criterion:
+
+            - containers which have been marked as "failed" or where any
+              direct or indirect predecessors were marked as "failed" with
+              mark_failure() will be yielded
+
+            If containers have neither met by this criterion, nor been marked
+            as succeeded and if all containers that could have been yielded so
+            far have been yielded already, this iterator will hang and wait
+            for this situation to be resolved through further mark_success()/
+            mark_failure() calls.
+
+            As a result, this iterator will eventually hang unless you make
+            sure to eventually mark all returned items with "mark_success" or
+            "mark_failure". If you fail to do that, the iterator will remain
+            stuck.
+        """
+        raise NotImplementedError("not implemented at this point")
 
 class ContainerLinkDependencyResolution(object):
+    """ This class builds a graph based on the container.dependencies (which
+        are themselves constructed from the docker links of each container).
+
+        This graph can then be used with DoAlongDependencyEdges to do things
+        according to the dependency order.
+    """
     def __init__(self, containers):
         self.containers = containers
         self.graph = dict()
@@ -2404,23 +2587,34 @@ class ContainerLinkDependencyResolution(object):
                     container, [], [], self.graph)
 
         # Go through containers again and add arcs:
-        for container in self.containers:
-            source_node = self.graph[container]
-            for dependency in container.dependencies:
-                dep_container = None
-                try:
-                    dep_container = dep.container
-                except ValueError:
-                    print("docker-rudder: error: dependency for " +\
-                        str(container) + " is not in known services, " +\
-                        "can't resolve dependency chain: " +\
-                        str(dep), file=sys.stderr)
-                    sys.exit(1)
-                target_node = self.graph[dep_container]
-                if not target_node in source_node.incoming_links:
-                    source_node.outgoing_links.append(target_node)
-                if not source_node in target_node.outgoing_links:
-                    target_node.incoming_links.append(source_node)
+        node_added = True
+        while node_added:
+            node_added = False
+            for container in self.containers:
+                source_node = self.graph[container]
+                for dependency in container.dependencies:
+                    dep_container = None
+                    try:
+                        dep_container = dependency.container
+                    except ValueError:
+                        print("docker-rudder: error: dependency for " +\
+                            str(container) + " is not in known services, " +\
+                            "can't resolve dependency chain: " +\
+                            str(dependency), file=sys.stderr)
+                        sys.exit(1)
+                    if not dep_container in self.graph:
+                        self.graph[dep_container] = \
+                            ContainerLinkDependencyNode(
+                            dep_container, [], [], self.graph)
+                        node_added = True
+                    target_node = self.graph[dep_container]
+                    if not target_node in source_node.incoming_links:
+                        source_node.outgoing_links.append(target_node)
+                    if not source_node in target_node.outgoing_links:
+                        target_node.incoming_links.append(source_node)
+                if node_added:
+                    break
+        # Done! Graph complete
 
 class ContainerStatusInfo(object):
     def __init__(self, container):
@@ -2431,12 +2625,40 @@ class ContainerStatusInfo(object):
         if ordered:
             dict_class = OrderedDict
         info = dict_class()
-        info["Canonical docker container name"] = container.default_container_name 
-        info["Owning service info"] = OrderedDict()
-        info["Owning service info"]["Name"] = container.service.name
-        info["Owning service info"]["Location"] = container.service.service_path
-        info["Running"] = container.running
-        info["Volume information"] = list()
+        info["Canonical docker container name"] = \
+            self.container.default_container_name 
+        info["Owning service"] = OrderedDict()
+        info["Owning service"]["Name"] = self.container.service.name
+        info["Owning service"]["Location"] = \
+            self.container.service.service_path
+        info["Running"] = self.container.running
+        info["Dependencies"] = OrderedDict()
+        resolution = ContainerLinkDependencyResolution(
+            Service.all_containers())
+
+        info["Dependencies"]["Pre-Start"] = []
+        pre_start = \
+            DoAlongDependencyEdges(resolution, [self.container],
+            along_incoming=False, reverse_yield_order=False)
+        for container in pre_start.unprocessed_containers():
+            if container == self.container:
+                pre_start.mark_success(container)
+                continue
+            info["Dependencies"]["Pre-Start"].append(
+                container)
+            pre_start.mark_success(container)
+        info["Dependencies"]["Pre-Stop-Post-Restart"] = []
+        pre_stop = \
+            DoAlongDependencyEdges(resolution, containers,
+            along_incoming=True, reverse_yield_order=True)
+        for container in pre_stop.unprocessed_containers():
+            if container == self.container:
+                pre_stop.mark_success(container)
+                continue
+            info["Dependencies"]["Pre-Stop-Post-Restart"].append(
+                container)
+            pre_stop.mark_success(container)
+        info["Volumes"] = list()
         for volume in self.container.volumes:
             vol_info = dict_class()
             if volume.id != None:
@@ -2458,7 +2680,7 @@ class ContainerStatusInfo(object):
                         mount_info["Container mount path"] =\
                             mount.mount_container_filesystem_path
                     vol_info["Mounts"].append(mount_info)
-            info["Volume information"].append(vol_info)
+            info["Volumes"].append(vol_info)
         return info
 
 def unknown_action(hint=None):
@@ -2633,8 +2855,7 @@ elif args.action == "start" or args.action == "restart":
         sys.exit(0)
 
     resolution = ContainerLinkDependencyResolution(
-        [container for container in service.containers\
-            for service in Services.all()])
+        Service.all_containers())
 
     tracker = FailedLaunchTracker()
     scheduled_action = "restart"
@@ -2646,8 +2867,8 @@ elif args.action == "start" or args.action == "restart":
     if scheduled_action == "restart":
         stop_before_restart = \
             DoAlongDependencyEdges(resolution, containers,
-            along_incoming_edges=True, reverse_yield_order=True)
-        for container in stop_before_restart.next():
+            along_incoming=True, reverse_yield_order=True)
+        for container in stop_before_restart.unprocessed_containers():
             if not container in containers:
                 print_msg("stopping... (this container is depending on 1+ " +\
                     "of the container(s) scheduled for restart)",
@@ -2664,7 +2885,8 @@ elif args.action == "start" or args.action == "restart":
 
     # Helper function to launch a service:
     threads = []
-    def start_container(container, is_last=False):
+    def start_container(container, is_last=False,
+            do_on_failure=None, do_on_success=None):
         container = start_all[i]
         if container.running:
             if container in containers:
@@ -2674,6 +2896,13 @@ elif args.action == "start" or args.action == "restart":
                     service=container.service.name,\
                     container=container.name,
                     color="green")
+            elif container in restart_dependencies:
+                print_msg("already running. (this container was " +\
+                        "an external dependency on the " + scheduled_action +\
+                        "ed containers) - weird, didn't we stop it before??",
+                    service=container.service.name,\
+                    container=container.name,
+                    color="yellow")
             else:
                 print_msg("already running. (this container is " +\
                         "a dependency of a container scheduled for " +\
@@ -2685,67 +2914,48 @@ elif args.action == "start" or args.action == "restart":
         if not is_last:
             t = LaunchThreaded.attempt_launch(container,
                 failed_launch_tracker=tracker,
-                force_container_recreation=(args.force is True))
+                force_container_recreation=(args.force is True),
+                do_on_failure=do_on_failure,
+                do_on_success=do_on_success)
         else:
             t = LaunchThreaded.attempt_launch(container,
                 failed_launch_tracker=tracker,
                 to_background_timeout=None,
-                force_container_recreation=(args.force is True))
+                force_container_recreation=(args.force is True),
+                do_on_failure=do_on_failure,
+                do_on_success=do_on_success)
         if t != None:
             threads.append(t)
 
     # Start the dependencies of our container launch set:
     start_dependency_containers = \
         DoAlongDependencyEdges(resolution, containers,
-        along_incoming_edges=False, reverse_yield_order=False,
+        along_incoming=False, reverse_yield_order=False,
         expand_initial_set=True)
-    for container in start_dependency_containers:
-        print_msg("already running. (this container is " +\
-            "a dependency of a container scheduled for " +\
-            scheduled_action + ")",
-            service=container.service.name,\
-            container=container.name,
-            color="green")
+    for container in start_dependency_containers.unprocessed_containers():
+        current_container = container
+        start_container(container, last=False,
+            do_on_failure=lambda: \
+            start_dependency_containers.mark_failure(current_container),
+            do_on_success=lambda: \
+            start_dependency_containers.mark_success(current_container))
 
     # Start everything again:
     start_containers = \
         DoAlongDependencyEdges(resolution, set(containers) +\
             restart_dependencies,
-        along_incoming_edges=False, reverse_yield_order=False,
+        along_incoming=False, reverse_yield_order=False,
         expand_initial_set=False)
     
     start_all = start_containers + restart_dependant_containers
     i = 0
     while i < len(start_all):
-        container = start_all[i]
-        if container.running:
-            if container in containers:
-                print_msg("already running. (this container was " +\
-                        "scheduled for " +\
-                        scheduled_action + ")",
-                    service=container.service.name,\
-                    container=container.name,
-                    color="green")
-            else:
-                print_msg("already running. (this container is " +\
-                        "a dependency of a container scheduled for " +\
-                        scheduled_action + ")",
-                    service=container.service.name,\
-                    container=container.name,
-                    color="green")
-            i += 1
-            continue
-        if i < len(start_all) - 1:
-            t = LaunchThreaded.attempt_launch(container,
-                failed_launch_tracker=tracker,
-                force_container_recreation=(args.force is True))
-        else:
-            t = LaunchThreaded.attempt_launch(container,
-                failed_launch_tracker=tracker,
-                to_background_timeout=None,
-                force_container_recreation=(args.force is True))
-        if t != None:
-            threads.append(t)
+        current_container = start_all[i]
+        start_container(container, last=False,
+            do_on_failure=lambda: \
+            start_containers.mark_failure(current_container),
+            do_on_success=lambda: \
+            start_containers.mark_success(current_container))
         i += 1
     LaunchThreaded.wait_for_launches(threads)
     if len(tracker) > 0:
@@ -2804,7 +3014,96 @@ elif args.action == "snapshot":
     else:
         sys.exit(0)
 elif args.action == "status":
-    pass    
+    if len(args.argument) == 0:
+        print("docker-rudder: error: please specify the name " + \
+            "of the service or container to print info for, " +\
+            "or \"all\"", file=sys.stderr)
+        sys.exit(1)
+    containers = TargetsParser.get_containers(" ".join(args.argument),
+        print_error=True)
+    if containers == None:
+        sys.exit(1)
+    def print_info(key, value=None, color=None, bold=False,
+            no_line_break=False):
+        if hasattr(value, "append"):
+            if len(value) == 0:
+                value = "<empty list>"
+            else:
+                value = ", ".join([str(item) for item in value])
+        if bold:
+            t = "\033[1m" + key
+        else:
+            t = key
+        if value == None:
+            if bold:
+                t += "\033[0m"
+            print(t)
+            return
+        if (len(value) > 25 or value.find("\n") >= 0) and \
+                not no_line_break:
+            value = "\n  " + "\n  ".join(
+                [line for line in value.split("\n")])
+        if bold:
+            t += "\033[0m: "
+        else:
+            t += ": "
+        if color == "red":
+            t += "\033[31m\033[1m" + value
+        elif color == "yellow":
+            t += "\033[33m\033[1m" + value
+        elif color == "green":
+            t += "\033[32m\033[1m" + value
+        elif color == "blue":
+            t += "\033[34m\033[1m" + value
+        else:
+            t += value
+        if color != None:
+            t += "\033[0m"
+        print(t)
+    first = True
+    for container in containers:
+        if first:
+            first = False
+        else:
+            print("")
+        print_info("Status for", str(container), bold=True,
+            no_line_break=True)
+        print("-" * (len("Status for: ") + len(str(container))))
+        info = ContainerStatusInfo(container).get()
+        print_info("Canonical docker container name",
+            container.default_container_name)
+        if container.running:
+            print_info("Running", "yes", color="green")
+        else:
+            print_info("Running", "no", color="red")
+        print_info("Configuration file",
+            os.path.join(container.service.service_path,
+            "docker-compose.yml"))
+        snapshots = Snapshots(container)
+        if not snapshots.subvolume_readiness_check():
+            print_info("Live data snapshot support",
+                "no, errors found.\nTry \"drudder snapshot " +\
+                str(container.service.name) + "\" for details",
+                color="red")
+        else:
+            print_info("Live data snapshot support", "ok", color="green")
+        print("This container depends on "+\
+            "(ensured to run if this one starts):")
+        l = info["Dependencies"]["Pre-Start"]
+        if len(l) == 0:
+            print("  <no dependencies>")
+        else:
+            for item in l:
+                print(" - " + str(item))
+        print("Other containers depending on this " +\
+            "(restarted along with this one):")
+        l = info["Dependencies"]["Pre-Stop-Post-Restart"]
+        if len(l) == 0:
+            print("<no dependencies>")
+        else:
+            for item in l:
+                print(" - " + str(item))
+    sys.exit(0)
 elif args.action == "dump-container-info":
     if len(args.argument) == 0:
         print("docker-rudder: error: please specify the name " + \
@@ -2818,7 +3117,7 @@ elif args.action == "dump-container-info":
     for container in containers:
         info = ContainerStatusInfo(container).get(ordered=True)
         print("# --- Container: " + str(container))
-        print(str(container).replace("/", "_") + ":")
+        print("\"" + str(container) + "\":")
         def serialize(item, indent=2):
             t = ""
             if isinstance(item, dict) or isinstance(item, OrderedDict):
@@ -2845,7 +3144,9 @@ elif args.action == "dump-container-info":
                 return " " * indent + str(item)
             return t
         print(serialize(info))
+    sys.exit(0)
 elif args.action == "clean":
     Service.global_clean_up(args.force != True)
 else:
     unknown_action()
+
