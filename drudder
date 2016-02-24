@@ -816,10 +816,8 @@ class ServiceContainer(object):
     def __neq__(self, other):
         return not self.__eq__(other)
 
-    def launch(self, force_container_recreation=False):
-        if self.running:
-            return
-
+    @property
+    def potentially_lost_volumes(self):
         # Find volumes that will be dangling and not re-attached by
         # docker-compose on container recreation:
         potentially_lost_volumes = []
@@ -836,6 +834,14 @@ class ServiceContainer(object):
                 # Host mount specified in .yml -> we should be fine
                 continue
             potentially_lost_volumes.append(volume)
+        return potentially_lost_volumes
+
+    def launch(self, force_container_recreation=False):
+        if self.running:
+            return
+
+        # Warn about volumes that might be dangling after recreation
+        potentially_lost_volumes = self.potentially_lost_volumes
         if len(potentially_lost_volumes) == 0 or \
                 force_container_recreation:
             if len(potentially_lost_volumes) > 0:
@@ -2830,7 +2836,6 @@ class ContainerStatusInfo(object):
         info["Dependencies"] = OrderedDict()
         resolution = ContainerLinkDependencyResolution(
             Service.all_containers())
-
         info["Dependencies"]["Pre-Start"] = []
         pre_start = \
             DoAlongDependencyEdges(resolution, [self.container],
@@ -2855,6 +2860,9 @@ class ContainerStatusInfo(object):
             pre_stop.mark_success(container)
         info["Dependencies"]["Pre-Stop-Post-Restart"] = \
             list(reversed(info["Dependencies"]["Pre-Stop-Post-Restart"]))
+
+        # Collect volumes:
+        potentially_lost = self.container.potentially_lost_volumes
         info["Volumes"] = list()
         for volume in self.container.volumes:
             vol_info = dict_class()
@@ -2866,6 +2874,8 @@ class ContainerStatusInfo(object):
             else:
                 vol_info["Unnamed"] = True
             vol_info["Specified in YAML"] = volume.specified_in_yml
+            if volume in potentially_lost:
+                vol_info["Potentially lost on container recreation"] = True
             mounts = volume.mounts
             if len(mounts) > 0:
                 vol_info["Mounts"] = list()
@@ -3312,6 +3322,13 @@ elif args.action == "status":
         else:
             for item in l:
                 print(" - " + str(item))
+        potentially_lost = container.potentially_lost_volumes
+        if len(potentially_lost) > 0:
+            print("\033[33m\033[1mWarning: some volumes might be " +\
+                "lost on container recreation:\n         "+\
+                ", ".join([str(vol) for vol in potentially_lost]) + "\n" +\
+                "         Make sure to specify them in your " +\
+                    "docker-compose.yml!\033[0m")
     sys.exit(0)
 elif args.action == "dump-container-info":
     if len(args.argument) == 0:
