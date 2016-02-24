@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-Copyright (c) 2015-2016  Jonas Thiem
+Copyright (c) 2015-2016  Jonas Thiem et al.
 
 This software is provided 'as-is', without any express or implied
 warranty. In no event will the authors be held liable for any damages
@@ -239,7 +239,8 @@ class SystemInfo(object):
 
     @staticmethod
     def locate_binary(name):
-        """ Locate a binary of some name, or return None if it can't be found.
+        """ Locate a binary of some name in the common system-wide places
+            and return the full path, or return None if it can't be found.
         """
         badchars = '\'"$<> %|&():*/\\{}#!?=\n\r\t[]\033'
         for char in badchars:
@@ -259,6 +260,11 @@ class SystemInfo(object):
     @staticmethod
     def check_output_with_isolated_pty(cmd, shell=False, cwd=None,
             stdout=None, stderr=None, timeout=None, env=None):
+        """ This is a re-implementation of subprocess.check_output() which
+            will isolate the child process in a pseudo-TTY to prevent it from
+            accessing the main terminal itself where docker-rudder itself is
+            running from.
+        """
         if cwd == None:
             cwd = os.getcwd()
         if stderr == None:
@@ -316,8 +322,8 @@ class SystemInfo(object):
 
     @staticmethod
     def docker_path():
-        """ Locate docker binary and return its path, or exit process with
-            error if not available.
+        """ Locate docker binary and return its path, or print an error
+            and exit the program with sys.exit(1) if not available.
         """
         if SystemInfo.__cached_docker_path != None:
             return SystemInfo.__cached_docker_path
@@ -345,7 +351,10 @@ class SystemInfo(object):
     
     @staticmethod
     def is_btrfs_subvolume(path):
-        """ Check if the given path is a btrfs subvolume.
+        """ Check if the given path is a btrfs subvolume. Returns True if
+            if it is, or False if not. May print out various warnings if there
+            were problems detecting this. May raise a ValueError if the path
+            couldn't be properly examined for some reason.
         """
         path = os.path.realpath(path)
         nontrivial_error = "error: failed to map a btrs subvolume "+\
@@ -446,8 +455,35 @@ class SystemInfo(object):
 
     @staticmethod
     def get_fs_mount_root(path):
+        """ Find out where the mount point of the filesystem is located of the
+            given file path. (e.g. for a path "/home/myuser/somefile"
+            located inside a home partition mounted at /home/, this would
+            return "/home/") The information is probed using the "df" tool.
+        """
+        # Make the path absolute and make sure it leads to an existing thing:
+        path = os.path.abspath(path)
         if not os.path.exists(path):
             raise ValueError("given path does not exist: " + str(path))
+
+        # If this is a symlink itself, make sure the parent folder is
+        # converted to the actual disk path (-> all parent symlinks are
+        # resolved to actual disk paths):
+        if os.path.islink(path):
+            element_name = os.path.basename(os.path.normpath(path))
+            parent = os.path.normpath(os.path.join(
+                os.path.normpath(path), ".."))
+            path = os.path.join(os.path.normpath(parent), element_name)
+        else:
+            # Not a symlink itself. Simply make sure it's the actual real
+            # path on disk (-> all symlinks in the path are resolved):
+            path = os.path.realpath(path)
+
+        # Check again to make sure the real disk path is an existing thing:
+        if not os.path.exists(path):
+            raise ValueError(
+                "converted real path does not exist: " + str(path))
+
+        # Run "df" to find the mount point:
         output = subprocess.check_output([
             SystemInfo.locate_binary("df"), path]).\
             decode("utf-8", "ignore").strip()
@@ -481,7 +517,8 @@ class SystemInfo(object):
     @staticmethod
     def filesystem_type_at_path(path):
         """ Find out the filesystem a given directory or file is on and return
-            the name (e.g. "ext4", "btrfs", ...)
+            the name (e.g. "ext4", "btrfs", ...). The information is probed
+            using the "df" tool.
         """
         if not os.path.exists(path):
             raise ValueError("given path does not exist: " + str(path))
@@ -526,14 +563,22 @@ class SystemInfo(object):
             return fs_type
         raise RuntimeError('failed to find according mount entry')
 
-    def _btrfs_subvolume_stat_check(path):
+    @staticmethod
+    def btrfs_subvolume_stat_check(path):
+        """ Checks whether something that is supposedly a btrfs volume is
+            also identified as such by the "stat" tool (returns True) or not
+            (returns False).
+        """
         output = subprocess.check_output([locate_binary("stat"),
             "-c", "%i", path]).decode('utf-8', 'ignore').strip()
         return (output == "256")
 
 def print_msg(text, service=None, container=None, color="blue"):
     """ Print out a nicely formatted message prefixed with
-        [docker-rudder] and possibly a service name.
+        [docker-rudder] and/or possibly a service or container name.
+
+        You can specify a signal color, with red and yellow changing the
+        displayed message type from INFO to ERROR or WARNING respectively.
     """
     info_msg = "INFO"
     if color == "red":
@@ -601,6 +646,10 @@ def print_msg(text, service=None, container=None, color="blue"):
     print(print_text)
 
 class DataVolumeMount(object):
+    """ This represents a docker volume mount with the known information
+        about this mount. This is used by the DataVolume class below to
+        identify the various places it is mounted on the host's disk
+    """
     def __init__(self, host_path=None,
             mount_container=None, mount_container_filesystem_path=None):
         self.host_path = host_path
@@ -613,6 +662,12 @@ class DataVolumeMount(object):
         return "<unspecified volume mount of " + str(container) + ">"
 
 class DataVolume(object):
+    """ This specifies the known information about a data volume. A volume
+        can be either with no host directory mount and system-wide/reusable
+        with a name, no host directory mount and system-wide/reusable with a
+        random id, or with a host directory mount (which means it is usually
+        "owned" by just one specific containers).
+    """
     def __init__(self, known_host_mount=None, id=None, name=None):
         self.known_host_mount = known_host_mount
         self.id = id
@@ -655,12 +710,28 @@ class DataVolume(object):
         return False
 
     def _set_owning_container(self, container, container_fs_path=None):
+        """ Set the container this volume is associated with. Only for
+            internal use. This is called for volumes that are specified as
+            host mounts in docker-compose.yml and don't have a proper
+            system-wide volume identifier/name for use in other containers.
+
+            DEVELOPER NOTE (Jonas Thiem):
+            In theory, a volume that is purely a host directory mount can be
+            used by multiple containers of course. However, right now
+            docker-rudder only builds up volume information per container, and
+            therefore this container-centric approach is sufficient for now.
+            However, later this should be changed to allow multiple owning
+            containers.
+        """
         self.owning_container = container
         if container_fs_path != None:
             self.owning_container_path = container_fs_path
 
     @property
     def mounts(self):
+        """ Return the known places this DataVolume is mounted at. Returns
+            a list of DataVolumeMount instances (or an empty list).
+        """
         if self.known_host_mount != None:
             if self.owning_container != None:
                 return [ DataVolumeMount(host_path=self.known_host_mount,
@@ -1683,6 +1754,11 @@ class LaunchThreaded(threading.Thread):
                 launch_t.join()
 
 class Permissions:
+    """ This represents permissions information parsed from a permssion.yml.
+        This allows the administrator to specify permissions that should be
+        applied to the live data folder (where usually read-write volumes are
+        mounted).
+    """
     def __init__(self, service):
         self.service = service
 
@@ -1891,8 +1967,8 @@ class Snapshots(object):
             sys.exit(1)
 
     def subvolume_readiness_check(self, print_errors=True):
-        """ Check if the given service is ready for snapshotting or still needs
-            btrfs subvolume conversion. Print a warning if not.
+        """ Check if the given service is ready for snapshotting or still
+            needs btrfs subvolume conversion. Print a warning if not.
         """
         fs = SystemInfo.filesystem_type_at_path(
             self.service.service_path)
@@ -1940,7 +2016,8 @@ class Snapshots(object):
         return True
 
     def do(self):
-        """ Make a backup of the live data of the service. """
+        """ Make a backup of the live data of the service.
+        """
 
         self.btrfs_tool_check()
 
@@ -2105,7 +2182,7 @@ class Snapshots(object):
 
         # Make sure the btrfs snapshot path is unused:
         if os.path.exists(snapshot_dir):
-            if SystemInfo._btrfs_subvolume_stat_check(snapshot_dir):
+            if SystemInfo.btrfs_subvolume_stat_check(snapshot_dir):
                 print_msg("warning: .btrfs-livedata-snapshot/ " \
                     + "already present! " \
                     + "This is probably a leftover from a previously " + \
@@ -2251,6 +2328,10 @@ class Snapshots(object):
         return True
 
 class TargetsParser(object):
+    """ A helper class to parse user input and turn it into container or
+        services lists.
+    """
+
     @staticmethod
     def get_containers(targets, print_error=False):
         while targets.find("  ") >= 0:
@@ -2330,6 +2411,9 @@ class TargetsParser(object):
         return list(result)
 
 class ContainerLinkDependencyNode(object):
+    """ A node in the dependency graph of container dependencies.
+        Has incoming and outgoing link edges, and has an associated container.
+    """
     def __init__(self, container, incoming_links, outgoing_links, graph):
         self.incoming_links = incoming_links
         self.outgoing_links = outgoing_links
@@ -2725,6 +2809,9 @@ class ContainerLinkDependencyResolution(object):
         print("End of Graph.")
 
 class ContainerStatusInfo(object):
+    """ A class to compute a dictionary of all sorts of extra information for
+        a container. Used by the "status" command.
+    """
     def __init__(self, container):
         self.container = container
 
