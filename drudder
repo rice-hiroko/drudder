@@ -1538,12 +1538,21 @@ class LaunchThreaded(threading.Thread):
     """
     
     def __init__(self, container, failed_launch_tracker=None,
-            force_container_recreation=False):
+            force_container_recreation=False, do_on_success=None,
+            do_on_failure=None):
         super().__init__()
         self.container = container
         self.failed_launch_tracker = failed_launch_tracker
         self.path = self.container.service.service_path
         self.force_container_recreation = force_container_recreation
+        def do_nothing(self):
+            pass
+        self.do_on_success = do_on_success
+        if self.do_on_success is None:
+            self.do_on_success = do_nothing
+        self.do_on_failure = do_on_failure
+        if self.do_on_failure is None:
+            self.do_on_failure = do_nothing
 
     def run(self):
         try:
@@ -1589,6 +1598,7 @@ class LaunchThreaded(threading.Thread):
                                     color="red")
                                 self.failed_launch_tracker.add(
                                     self.container)
+                                self.do_on_failure()
                                 return
                         time.sleep(5)
 
@@ -1607,10 +1617,12 @@ class LaunchThreaded(threading.Thread):
                         container=self.container.name, color="red")
                     if self.failed_launch_tracker != None:
                         self.failed_launch_tracker.add(self.container)
+                    self.do_on_failure()
                     return
                 print_msg("now running.",
                     service=self.container.service.name,
                     container=self.container.name, color="green")
+                self.do_on_success()
             except subprocess.CalledProcessError:
                 print_msg("failed to launch. (error exit code)",\
                     service=self.container.service.name,
@@ -1618,6 +1630,7 @@ class LaunchThreaded(threading.Thread):
                     color="red")
                 if self.failed_launch_tracker != None:
                     self.failed_launch_tracker.add(self.container)
+                self.do_on_failure()
             except Exception as e:
                 print_msg("failed to launch. (unknown error)",\
                     service=self.container.service.name,
@@ -1625,6 +1638,7 @@ class LaunchThreaded(threading.Thread):
                     color="red")
                 if self.failed_launch_tracker != None:
                     self.failed_launch_tracker.add(self.container)
+                self.do_on_success()
                 raise e
         except Exception as e:
             print("UNEXPECTED ERROR", file=sys.stderr)
@@ -1633,7 +1647,8 @@ class LaunchThreaded(threading.Thread):
 
     @staticmethod
     def attempt_launch(container, to_background_timeout=5,
-            failed_launch_tracker=None, force_container_recreation=False):
+            failed_launch_tracker=None, force_container_recreation=False,
+            do_on_success=None, do_on_failure=None):
         """ Launch a given service and wait for it to run for a few seconds.
             If that isn't long enough for it to start running, return
             execution to possibly launch further services while this one is
@@ -1642,7 +1657,8 @@ class LaunchThreaded(threading.Thread):
 
         # Start a new launch thread:
         launch_t = LaunchThreaded(container,
-            failed_launch_tracker=failed_launch_tracker)
+            failed_launch_tracker=failed_launch_tracker,
+            do_on_success=do_on_success, do_on_failure=do_on_failure)
         launch_t.start()
         
         # Wait for it to complete:
@@ -2388,13 +2404,14 @@ class DoAlongDependencyEdges(object):
         containers of this subgraph can be yielded.
     """
     def __init__(self, dependency_resolution_object,
-            initial_containers, reverse_yield_order=False,
-            along_incoming=False, expand_initial_set=False):
+            initial_containers,
+            along_incoming=False, expand_initial_set=True):
         self.access_lock = threading.Lock()
 
-        self.reverse_yield_order = False
+        self.expand_initial_set = expand_initial_set
         self.along_incoming = along_incoming
         self.graph = dependency_resolution_object.graph
+        self.containers = initial_containers
         self.start_set = set()
         for container in initial_containers:
             self.start_set.add(self.graph[container])
@@ -2403,29 +2420,37 @@ class DoAlongDependencyEdges(object):
         self.yielded_nodes = set()
         self.yielded_failed_nodes = set()
 
-        # Grow to the relevant subgraph:
+        # Grow to the relevant subgraph which can be possibly returned:
         expand_queue = queue.Queue()
         self.subgraph = {}
-        for container in initial_containers:
+        for container in initial_containers: # queue up initial containers
             self.subgraph[container] = self.graph[container]
             expand_queue.put(self.subgraph[container])
-        while not expand_queue.empty():
-            expand_node = expand_queue.get()
-            expanded_nodes = []
-            if along_incoming:
-                expanded_nodes = expand_node.incoming_links
-            else:
-                expanded_nodes = expand_node.outgoing_links
-            for expanded_node in expanded_nodes:
-                if not expanded_node.container in self.subgraph:
-                    self.subgraph[expanded_node.container] = expanded_node
-                    expand_queue.put(expanded_node)
+        if expand_initial_set:
+            while not expand_queue.empty(): # crawl through graph and grow it
+                expand_node = expand_queue.get()
+                expanded_nodes = []
+                if along_incoming:
+                    expanded_nodes = expand_node.incoming_links
+                else:
+                    expanded_nodes = expand_node.outgoing_links
+                for expanded_node in expanded_nodes:
+                    if not expanded_node.container in self.subgraph:
+                        self.subgraph[expanded_node.container] = expanded_node
+                        expand_queue.put(expanded_node)
 
     def __iter__(self):
         return self
 
     def get_next_candidates(self):
-        # Get root nodes:
+        """ Internal function. Don't call before obtaining access lock!!
+
+            Returns a set of candidates that can currently be returned as
+            unprocessed nodes. Ignores which ones have already been returned
+            by the iterator, but it ensures only those reachable through
+            success nodes are actually returned.
+        """
+        # Get root nodes in relevant sub graph:
         start_nodes = set()
         for node in self.subgraph.values():
             if self.along_incoming:
@@ -2446,6 +2471,11 @@ class DoAlongDependencyEdges(object):
                 return node.incoming_links
             else:
                 return node.outgoing_links
+        def get_predecessors(node):
+            if self.along_incoming:
+                return node.outgoing_links
+            else:
+                return node.incoming_links
         for node in start_nodes:
             examine_queue.put(node)
 
@@ -2456,33 +2486,73 @@ class DoAlongDependencyEdges(object):
             next_node = examine_queue.get()
             if not next_node in self.marked_done and \
                     not next_node in self.marked_failed:
-                candidates.append(next_node)
+                # This node is unprocessed. Check if all predecessors are
+                # actually marked as done so we can return it:
+                predecessors = get_predecessors(next_node)
+                reachable = True
+                for predecessor in predecessors:
+                    if not predecessor.container in self.subgraph:
+                        continue
+                    if not predecessor in self.marked_done:
+                        # Nope, at least one predecessor isn't done yet.
+                        reachable = False
+                        break
+                if reachable:
+                    candidates.append(next_node)
             else:
+                # This node is either failed or done/succeeded. See which:
                 if not next_node in self.marked_failed:
+                    # It's a succeeded node, therefore look at the successors:
                     for successor in get_successors(next_node):
                         if not successor in seen:
                             seen.add(successor)
                             examine_queue.put(successor)
 
-        # Get random item from list:   
+        # Return assembled candidates:
         return candidates
 
     def mark_success(self, container):
+        """ Mark a container as succeeded. This opens up all the direct
+            dependencies of this container to be returned from
+            unprocessed_containers() as next unprocessed containers to be
+            taken care of.
+        """
         self.marked_done.add(self.graph[container])
 
     def mark_failure(self, container):
+        """ Mark a container as failed. No container depending on this one
+            will be considered for yielding for unprocessed_containers()
+            anymore.
+        """
         self.marked_failed.add(self.graph[container])
 
     def _next_unprocessed_node(self):
+        """ Note: internal function, use unprocessed_nodes() iterator instead.
+
+            Get the next node that is still unprocessed.
+            
+            Calling this function continuously will gradually yield all
+            unprocessed nodes that are obtainable (see
+            unprocessed_containers() for details), and None if there is
+            currently no unprocessed node that can be returned.
+        """
+
         self.access_lock.acquire()
+        # Get all the candidates:
         candidates = self.get_next_candidates()
+
+        # Check which one we haven't already returned:
         actual_candidates = []
         for candidate in candidates:
             if not candidate in self.yielded_nodes:
                 actual_candidates.append(candidate)
+
+        # If no real candidate remains, return None:
         if len(actual_candidates) == 0:
             self.access_lock.release()
             return None
+
+        # Pick a random choice of the remaining candidates:
         yielded_node = random.choice(actual_candidates)
         self.yielded_nodes.add(yielded_node)
         result = yielded_node
@@ -2490,13 +2560,14 @@ class DoAlongDependencyEdges(object):
         return result
 
     def _all_nodes_processed(self):
+        """ Check if all nodes are either marked as success or failure.
+            Returns True if all are marked, False if some are still unmarked.
+        """
         result = True
         self.access_lock.acquire()
         for node in self.subgraph.values():
             if not node in self.marked_failed and \
                     not node in self.marked_done:
-                print("FOUND UNPROCESSED NODE: " + str(node))
-                print("marked_done: " + str(self.marked_done))
                 result = False
                 break
         self.access_lock.release()
@@ -2538,13 +2609,27 @@ class DoAlongDependencyEdges(object):
                 return self
 
             def __next__(self):
-                node = self.doalongobj._next_unprocessed_node()
-                while node == None and \
-                        not self.doalongobj._all_nodes_processed():
-                    time.sleep(0.2)
+                skipped = True
+                while skipped:
+                    skipped = False
+
+                    # Get next node or wait until we can get it:
                     node = self.doalongobj._next_unprocessed_node()
-                if node == None:
-                    raise StopIteration
+                    while node == None and \
+                            not self.doalongobj._all_nodes_processed():
+                        time.sleep(0.2)
+                        node = self.doalongobj._next_unprocessed_node()
+                    if node == None:
+                        raise StopIteration
+
+                    # Make sure we only expand beyond initial set if we were
+                    # supposed to do that:
+                    if not self.doalongobj.expand_initial_set and \
+                            not node.container in self.doalongobj.containers:
+                        # Skip this, it would expand beyond initial set.
+                        skipped = True
+                        continue
+                    break
                 return node.container
         return UnprocessedContainersIterator(self)
 
@@ -2602,12 +2687,18 @@ class ContainerLinkDependencyResolution(object):
                             "can't resolve dependency chain: " +\
                             str(dependency), file=sys.stderr)
                         sys.exit(1)
+
+                    # Make sure the target for our new arc is in the graph:
                     if not dep_container in self.graph:
                         self.graph[dep_container] = \
                             ContainerLinkDependencyNode(
                             dep_container, [], [], self.graph)
                         node_added = True
+
+                    # Obtain target node ref:
                     target_node = self.graph[dep_container]
+
+                    # Add arcs in both directions, if any is missing:
                     if not target_node in source_node.incoming_links:
                         source_node.outgoing_links.append(target_node)
                     if not source_node in target_node.outgoing_links:
@@ -2615,6 +2706,21 @@ class ContainerLinkDependencyResolution(object):
                 if node_added:
                     break
         # Done! Graph complete
+
+    def print_graph_debug(self):
+        print("Graph:")
+        seen = set()
+        for container in self.graph:
+            node = self.graph[container]
+            for outgoing in node.outgoing_links:
+                assert(node in outgoing.incoming_links)
+                print(str(node.container) + " -> " + str(outgoing.container))
+                seen.add(node.container)
+                seen.add(outgoing.container)
+        for container in self.graph:
+            if not container in seen:    
+                print(str(container))
+        print("End of Graph.")
 
 class ContainerStatusInfo(object):
     def __init__(self, container):
@@ -2639,7 +2745,7 @@ class ContainerStatusInfo(object):
         info["Dependencies"]["Pre-Start"] = []
         pre_start = \
             DoAlongDependencyEdges(resolution, [self.container],
-            along_incoming=False, reverse_yield_order=False)
+            along_incoming=False)
         for container in pre_start.unprocessed_containers():
             if container == self.container:
                 pre_start.mark_success(container)
@@ -2649,8 +2755,8 @@ class ContainerStatusInfo(object):
             pre_start.mark_success(container)
         info["Dependencies"]["Pre-Stop-Post-Restart"] = []
         pre_stop = \
-            DoAlongDependencyEdges(resolution, containers,
-            along_incoming=True, reverse_yield_order=True)
+            DoAlongDependencyEdges(resolution, [self.container],
+            along_incoming=True)
         for container in pre_stop.unprocessed_containers():
             if container == self.container:
                 pre_stop.mark_success(container)
@@ -2658,6 +2764,8 @@ class ContainerStatusInfo(object):
             info["Dependencies"]["Pre-Stop-Post-Restart"].append(
                 container)
             pre_stop.mark_success(container)
+        info["Dependencies"]["Pre-Stop-Post-Restart"] = \
+            list(reversed(info["Dependencies"]["Pre-Stop-Post-Restart"]))
         info["Volumes"] = list()
         for volume in self.container.volumes:
             vol_info = dict_class()
@@ -2865,10 +2973,16 @@ elif args.action == "start" or args.action == "restart":
     # Stop all indirect dependencies and the containers themselves:
     restart_dependencies = set()
     if scheduled_action == "restart":
-        stop_before_restart = \
+        unreversed_stop_before_restart = \
             DoAlongDependencyEdges(resolution, containers,
-            along_incoming=True, reverse_yield_order=True)
-        for container in stop_before_restart.unprocessed_containers():
+            along_incoming=True)
+        stop_before_restart = []
+        for container in \
+                unversed_stop_before_restart.unprocessed_containers():
+            stop_before_restart.add(container)
+            unreversed_stop_before_restart.mark_success(container)
+        stop_before_restart = list(reversed(stop_before_restart))
+        for container in stop_before_restart:
             if not container in containers:
                 print_msg("stopping... (this container is depending on 1+ " +\
                     "of the container(s) scheduled for restart)",
@@ -2881,13 +2995,11 @@ elif args.action == "start" or args.action == "restart":
                     service=container.service.name, container=container.name,
                     color="blue")
             LaunchThreaded.stop(container)
-            stop_before_restart.mark_success(container)
 
     # Helper function to launch a service:
     threads = []
     def start_container(container, is_last=False,
             do_on_failure=None, do_on_success=None):
-        container = start_all[i]
         if container.running:
             if container in containers:
                 print_msg("already running. (this container was " +\
@@ -2910,6 +3022,8 @@ elif args.action == "start" or args.action == "restart":
                     service=container.service.name,\
                     container=container.name,
                     color="green")
+            if do_on_success != None:
+                do_on_success()
             return
         if not is_last:
             t = LaunchThreaded.attempt_launch(container,
@@ -2930,11 +3044,14 @@ elif args.action == "start" or args.action == "restart":
     # Start the dependencies of our container launch set:
     start_dependency_containers = \
         DoAlongDependencyEdges(resolution, containers,
-        along_incoming=False, reverse_yield_order=False,
-        expand_initial_set=True)
+        along_incoming=False, expand_initial_set=True)
     for container in start_dependency_containers.unprocessed_containers():
         current_container = container
-        start_container(container, last=False,
+        if current_container in containers: # not a dependency
+            start_dependency_containers.mark_success(container)
+            continue
+        # Launch it:
+        start_container(container, is_last=False,
             do_on_failure=lambda: \
             start_dependency_containers.mark_failure(current_container),
             do_on_success=lambda: \
@@ -2942,16 +3059,19 @@ elif args.action == "start" or args.action == "restart":
 
     # Start everything again:
     start_containers = \
-        DoAlongDependencyEdges(resolution, set(containers) +\
-            restart_dependencies,
-        along_incoming=False, reverse_yield_order=False,
-        expand_initial_set=False)
+        DoAlongDependencyEdges(resolution, set(containers).union(\
+            restart_dependencies),
+        along_incoming=False, expand_initial_set=False)
+    start_containers_list = []
+    for container in start_containers.unprocessed_containers():
+        start_containers_list.append(container)
+        start_containers.mark_success(container)
     
-    start_all = start_containers + restart_dependant_containers
+    start_all = start_containers_list
     i = 0
     while i < len(start_all):
         current_container = start_all[i]
-        start_container(container, last=False,
+        start_container(container, is_last=(i < len(start_all) - 1),
             do_on_failure=lambda: \
             start_containers.mark_failure(current_container),
             do_on_success=lambda: \
@@ -3099,7 +3219,7 @@ elif args.action == "status":
             "(restarted along with this one):")
         l = info["Dependencies"]["Pre-Stop-Post-Restart"]
         if len(l) == 0:
-            print("<no dependencies>")
+            print("  <no dependencies>")
         else:
             for item in l:
                 print(" - " + str(item))
