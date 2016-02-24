@@ -838,11 +838,13 @@ class ServiceContainer(object):
         volumes_list = []
         if not rw_only:
             if "Volumes" in result[0]:
-                for volume in result[0]["Volumes"]:
-                    volumes_list.append(volume)
+                if result[0]["Volumes"] != None:
+                    for volume in result[0]["Volumes"]:
+                        volumes_list.append(volume)
             else:
-                for volume in result[0]["Config"]["Volumes"]:
-                    volumes_list.append(volume)
+                if result[0]["Config"]["Volumes"] != None:
+                    for volume in result[0]["Config"]["Volumes"]:
+                        volumes_list.append(volume)
         if rw_only:
             if "Volumes" in result[0]:
                 if not ("VolumesRW" in result[0]):
