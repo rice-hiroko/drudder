@@ -53,8 +53,8 @@ Usage:
                                 actions will already update the container 
                                 if any of the relevant Dockerfiles were
                                 changed.
-  drudder info <service>[/subservice] - show extended info about the
-                                        service
+  drudder status <service>[/subservice] - show extended info about the
+                                          service
   drudder logs <service>      - print logs of all docker containers of the
                                 service
   drudder shell <service>[/<subservice>]  - run a shell in the specified
