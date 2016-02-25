@@ -3161,21 +3161,12 @@ elif args.action == "start" or args.action == "restart":
         DoAlongDependencyEdges(resolution, set(containers).union(\
             restart_dependencies),
         along_incoming=False, expand_initial_set=False)
-    start_containers_list = []
     for container in start_containers.unprocessed_containers():
-        start_containers_list.append(container)
-        start_containers.mark_success(container)
-    
-    start_all = start_containers_list
-    i = 0
-    while i < len(start_all):
-        current_container = start_all[i]
-        start_container(container, is_last=(i < len(start_all) - 1),
+        start_container(container, is_last=False,
             do_on_failure=lambda: \
             start_containers.mark_failure(current_container),
             do_on_success=lambda: \
             start_containers.mark_success(current_container))
-        i += 1
     LaunchThreaded.wait_for_launches(threads)
     if len(tracker) > 0:
         print("docker-rudder: error: some launches failed.",
