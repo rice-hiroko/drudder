@@ -3077,8 +3077,8 @@ elif args.action == "start" or args.action == "restart":
             along_incoming=True)
         stop_before_restart = []
         for container in \
-                unversed_stop_before_restart.unprocessed_containers():
-            stop_before_restart.add(container)
+                unreversed_stop_before_restart.unprocessed_containers():
+            stop_before_restart.append(container)
             unreversed_stop_before_restart.mark_success(container)
         stop_before_restart = list(reversed(stop_before_restart))
         for container in stop_before_restart:
@@ -3147,7 +3147,7 @@ elif args.action == "start" or args.action == "restart":
     for container in start_dependency_containers.unprocessed_containers():
         current_container = container
         if current_container in containers: # not a dependency
-            start_dependency_containers.mark_success(container)
+            start_dependency_containers.mark_success(current_container)
             continue
         # Launch it:
         start_container(container, is_last=False,
@@ -3164,9 +3164,9 @@ elif args.action == "start" or args.action == "restart":
     for container in start_containers.unprocessed_containers():
         start_container(container, is_last=False,
             do_on_failure=lambda: \
-            start_containers.mark_failure(current_container),
+            start_containers.mark_failure(container),
             do_on_success=lambda: \
-            start_containers.mark_success(current_container))
+            start_containers.mark_success(container))
     LaunchThreaded.wait_for_launches(threads)
     if len(tracker) > 0:
         print("docker-rudder: error: some launches failed.",
