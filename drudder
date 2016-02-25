@@ -3280,21 +3280,22 @@ elif args.action == "status":
             no_line_break=True)
         print("-" * (len("Status for: ") + len(str(container))))
         info = ContainerStatusInfo(container).get()
-        print_info("Canonical docker container name",
-            container.default_container_name)
-        if container.running:
+        if info["Running"]:
             print_info("Running", "yes", color="green")
         else:
             print_info("Running", "no", color="red")
+        print_info("Canonical docker container name",
+            info["Canonical docker container name"])
         print_info("Configuration file",
             os.path.join(container.service.service_path,
             "docker-compose.yml"))
         snapshots = Snapshots(container)
         if not snapshots.subvolume_readiness_check():
             print_info("Live data snapshot support",
-                "no, errors found.\nTry \"drudder snapshot " +\
-                str(container.service.name) + "\" for details",
+                "no",
                 color="red")
+            print("  Hint: try \"drudder snapshot " +\
+                str(container.service.name) + "\" for details")
         else:
             print_info("Live data snapshot support", "ok", color="green")
         print("This container depends on "+\
@@ -3313,13 +3314,20 @@ elif args.action == "status":
         else:
             for item in l:
                 print(" - " + str(item))
-        potentially_lost = container.potentially_lost_volumes
-        if len(potentially_lost) > 0:
-            print("\033[33m\033[1mWarning: some volumes might be " +\
-                "lost on container recreation:\n         "+\
-                ", ".join([str(vol) for vol in potentially_lost]) + "\n" +\
-                "         Make sure to specify them in your " +\
-                    "docker-compose.yml!\033[0m")
+        have_potentially_lost_volumes = False
+        for volume in info["Volumes"]:
+            if "Potentially lost on container recreation" in volume:
+                if volume["Potentially lost on container recreation"] is True:
+                    have_potentially_lost_volumes = True
+                    break
+        if have_potentially_lost_volumes:
+            potentially_lost = container.potentially_lost_volumes
+            if len(potentially_lost) > 0:
+                print("\033[33m\033[1mWarning: some volumes might be " +\
+                    "lost on container recreation:\n         "+\
+                    ", ".join([str(vol) for vol in potentially_lost]) + "\n" +\
+                    "         Make sure to specify them in your " +\
+                        "docker-compose.yml!\033[0m")
     sys.exit(0)
 elif args.action == "dump-container-info":
     if len(args.argument) == 0:
