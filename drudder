@@ -3029,13 +3029,22 @@ elif args.action == "rebuild":
                 color="red")
             print("docker-rudder: error: aborted rebuilding")
             sys.exit(1)
+    some_failed = False
     for container in containers:
         print_msg("rebuilding container with no cache",
             service=container.service.name, container=container.name,
             color="blue")
-        subprocess.call([SystemInfo.docker_compose_path(), "build",
-            "--no-cache", "--pull", container.name],
-            cwd=container.service.service_path)
+        try:
+            subprocess.check_call([SystemInfo.docker_compose_path(), "build",
+                "--no-cache", "--pull", container.name],
+                cwd=container.service.service_path)
+        except CalledProcessError as e:
+            some_failed = True
+            print_msg("Build failure (exit code " +\
+                str(e.returncode) + ")", color="red")
+    if some_failed:
+        print_msg("Rebuilding completed with errors.", color="red")
+        sys.exit(1)
     print_msg("Rebuilding complete.", color="green")
     sys.exit(0)
 elif args.action == "shell":
