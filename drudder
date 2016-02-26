@@ -2497,7 +2497,8 @@ class DoAlongDependencyEdges(object):
     """
     def __init__(self, dependency_resolution_object,
             initial_containers,
-            along_incoming=False, expand_initial_set=True):
+            along_incoming=False, expand_initial_set=True,
+            reverse_yield_order=False):
         self.access_lock = threading.Lock()
 
         self.expand_initial_set = expand_initial_set
@@ -2511,6 +2512,7 @@ class DoAlongDependencyEdges(object):
         self.marked_failed = set()
         self.yielded_nodes = set()
         self.yielded_failed_nodes = set()
+        self.reverse_yield_order = reverse_yield_order
 
         # Grow to the relevant subgraph which can be possibly returned:
         expand_queue = queue.Queue()
@@ -2542,32 +2544,58 @@ class DoAlongDependencyEdges(object):
             by the iterator, but it ensures only those reachable through
             success nodes are actually returned.
         """
-        # Get root nodes in relevant sub graph:
         start_nodes = set()
-        for node in self.subgraph.values():
-            if self.along_incoming:
-                if len([node for node in node.outgoing_links\
-                        if node in self.subgraph.values()]) == 0:
-                    start_nodes.add(node)
-            else:
-                if len([node for node in node.incoming_links\
-                        if node in self.subgraph.values()]) == 0:
-                    start_nodes.add(node)
-        if len(start_nodes) == 0:
-            raise RuntimeError("invalid graph, no root nodes present")
+        if not self.reverse_yield_order:
+            # Get root nodes in relevant sub graph:
+            for node in self.subgraph.values():
+                if self.along_incoming:
+                    if len([node for node in node.outgoing_links\
+                            if node in self.subgraph.values()]) == 0:
+                        start_nodes.add(node)
+                else:
+                    if len([node for node in node.incoming_links\
+                            if node in self.subgraph.values()]) == 0:
+                        start_nodes.add(node)
+            if len(start_nodes) == 0:
+                raise RuntimeError("invalid graph, no root nodes present")
+        else:
+            # Get leaf nodes in relevant sub graph:
+            for node in self.subgraph.values():
+                if self.along_incoming:
+                    if len([node for node in node.incoming_links\
+                            if node in self.subgraph.values()]) == 0:
+                        start_nodes.add(node)
+                else:
+                    if len([node for node in node.outgoing_links\
+                            if node in self.subgraph.values()]) == 0:
+                        start_nodes.add(node)
+            if len(start_nodes) == 0:
+                raise RuntimeError("invalid graph, no leaf nodes present")
 
         # Prepare some stuff for gradually crawling the graph:
         examine_queue = queue.Queue()
         def get_successors(node):
             if self.along_incoming:
-                return node.incoming_links
+                if not self.reverse_yield_order:
+                    return node.incoming_links
+                else:
+                    return node.outgoing_links
             else:
-                return node.outgoing_links
+                if not self.reverse_yield_order:
+                    return node.outgoing_links
+                else:
+                    return node.incoming_links
         def get_predecessors(node):
             if self.along_incoming:
-                return node.outgoing_links
+                if not self.reverse_yield_order:
+                    return node.outgoing_links
+                else:
+                    return node.incoming_links
             else:
-                return node.incoming_links
+                if not self.reverse_yield_order:
+                    return node.incoming_links
+                else:
+                    return node.outgoing_links
         for node in start_nodes:
             examine_queue.put(node)
 
@@ -2839,7 +2867,7 @@ class ContainerStatusInfo(object):
         info["Dependencies"]["Pre-Start"] = []
         pre_start = \
             DoAlongDependencyEdges(resolution, [self.container],
-            along_incoming=False)
+            along_incoming=False, reverse_yield_order=True)
         for container in pre_start.unprocessed_containers():
             if container == self.container:
                 pre_start.mark_success(container)
@@ -2850,7 +2878,7 @@ class ContainerStatusInfo(object):
         info["Dependencies"]["Pre-Stop-Post-Restart"] = []
         pre_stop = \
             DoAlongDependencyEdges(resolution, [self.container],
-            along_incoming=True)
+            along_incoming=True, reverse_yield_order=True)
         for container in pre_stop.unprocessed_containers():
             if container == self.container:
                 pre_stop.mark_success(container)
@@ -2858,8 +2886,6 @@ class ContainerStatusInfo(object):
             info["Dependencies"]["Pre-Stop-Post-Restart"].append(
                 container)
             pre_stop.mark_success(container)
-        info["Dependencies"]["Pre-Stop-Post-Restart"] = \
-            list(reversed(info["Dependencies"]["Pre-Stop-Post-Restart"]))
 
         # Collect volumes:
         potentially_lost = self.container.potentially_lost_volumes
@@ -3143,7 +3169,8 @@ elif args.action == "start" or args.action == "restart":
     # Start the dependencies of our container launch set:
     start_dependency_containers = \
         DoAlongDependencyEdges(resolution, containers,
-        along_incoming=False, expand_initial_set=True)
+        along_incoming=False, expand_initial_set=True,
+        reverse_yield_order=True)
     for container in start_dependency_containers.unprocessed_containers():
         current_container = container
         if current_container in containers: # not a dependency
@@ -3160,7 +3187,8 @@ elif args.action == "start" or args.action == "restart":
     start_containers = \
         DoAlongDependencyEdges(resolution, set(containers).union(\
             restart_dependencies),
-        along_incoming=False, expand_initial_set=False)
+            along_incoming=False, expand_initial_set=False,
+            reverse_yield_order=True)
     for container in start_containers.unprocessed_containers():
         start_container(container, is_last=False,
             do_on_failure=lambda: \
