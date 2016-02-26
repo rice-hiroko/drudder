@@ -73,8 +73,8 @@ freely, subject to the following restrictions:
                                     actions will already update the container 
                                     if any of the relevant Dockerfiles were
                                     changed.
-      drudder status <service>[/subservice] - show extended info about the
-                                              service
+      drudder info <service>[/subservice] - show extended info about the
+                                            service
       drudder logs <service>      - print logs of all docker containers of the
                                     service
       drudder shell <service>[/<subservice>]  - run a shell in the specified
@@ -1859,8 +1859,8 @@ parser.add_argument("action",
 
     "restart": restart the service specified as argument (or "all" for all).
 
-    "status": show more detailed status of the given service (or "all for
-              all).
+    "info": show more detailed info for the given service (or "all for
+            all).
 
     "logs": output the logs of all the docker containers of the service
             specified as argument (or "all" for all).
@@ -2844,7 +2844,7 @@ class ContainerLinkDependencyResolution(object):
 
 class ContainerStatusInfo(object):
     """ A class to compute a dictionary of all sorts of extra information for
-        a container. Used by the "status" command.
+        a container. Used by the "info" command.
     """
     def __init__(self, container):
         self.container = container
@@ -3251,7 +3251,7 @@ elif args.action == "snapshot":
         sys.exit(1)
     else:
         sys.exit(0)
-elif args.action == "status":
+elif args.action == "info":
     if len(args.argument) == 0:
         print("docker-rudder: error: please specify the name " + \
             "of the service or container to print info for, " +\
@@ -3304,9 +3304,9 @@ elif args.action == "status":
             first = False
         else:
             print("")
-        print_info("Status for", str(container), bold=True,
+        print_info("Info for", str(container), bold=True,
             no_line_break=True)
-        print("-" * (len("Status for: ") + len(str(container))))
+        print("-" * (len("Info for: ") + len(str(container))))
         info = ContainerStatusInfo(container).get()
         if info["Running"]:
             print_info("Running", "yes", color="green")
