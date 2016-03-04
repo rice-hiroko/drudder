@@ -211,11 +211,27 @@ import uuid
 yaml_available = False
 try:
     import yaml
+    yaml_available = True
 except ImportError:
-    print("IMPORTANT WARNING: using YAML fallback hack. This will work for "+\
-        "most generic configs, but lead to errors for advanced YAML files. "+\
-        "Please install pyyaml to use proper parsing.", file=sys.stderr)
+    yaml_available = False
     pass
+
+def yaml_error():
+    print("docker-rudder: error: no PyYAML available.", file=sys.stderr)
+    pip_name = "pip3"
+    if SystemInfo.locate_binary(pip_name) == None:
+        pip_name = "python3-pip"
+        if SystemInfo.locate_binary(pip_name) == None:
+            pip_name = "python-pip3"
+            if SystemInfo.locate_binary(pip_name) == None:
+                pip_name = None
+    if pip_name != None:
+        print("docker-rudder: error: no PyYAML available. " +\
+            "Install PyYAML using:", file=sys.stderr)
+        print("    sudo " + pip_name + " install pyyaml")
+    else:
+        print("docker-rudder: error: no PyYaml available. (pip3 is also " +\
+            "unavailable??)", file=sys.stderr)
 
 class DoubleLineBreakFormatter(HelpFormatter):
     """ Retains double line breaks/paragraphs """
@@ -1842,6 +1858,10 @@ class Permissions:
 
         return perm_dict
 
+if not yaml_available:
+    yaml_error()
+    sys.exit(1)
+
 parser = argparse.ArgumentParser(description=textwrap.dedent('''\
     docker-rudder: a tool to simply managing a larger collection of
     docker-compose.yml-specified container groups.'''
@@ -2624,6 +2644,8 @@ class DoAlongDependencyEdges(object):
                 if not next_node in self.marked_failed:
                     # It's a succeeded node, therefore look at the successors:
                     for successor in get_successors(next_node):
+                        if not successor.container in self.subgraph:
+                            continue
                         if not successor in seen:
                             seen.add(successor)
                             examine_queue.put(successor)
