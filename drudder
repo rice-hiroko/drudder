@@ -1753,7 +1753,8 @@ class LaunchThreaded(threading.Thread):
         # Start a new launch thread:
         launch_t = LaunchThreaded(container,
             failed_launch_tracker=failed_launch_tracker,
-            do_on_success=do_on_success, do_on_failure=do_on_failure)
+            do_on_success=do_on_success, do_on_failure=do_on_failure,
+            force_container_recreation=force_container_recreation)
         launch_t.start()
         
         # Wait for it to complete:
