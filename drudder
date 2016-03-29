@@ -285,9 +285,12 @@ class DockerComposeYml(object):
                 self._desired_data = None
                 if isinstance(self.parsed_obj, dict) and \
                         "services" in self.parsed_obj:
-                    if container in self.parsed_obj:
-                        if isinstance(self.parsed_obj[container], dict):
-                            self._desired_data = self.parsed_obj[container]
+                    if isinstance(self.parsed_obj["services"], dict) and \
+                            container in self.parsed_obj["services"]:
+                        if isinstance(self.parsed_obj["services"]\
+                                [container], dict):
+                            self._desired_data = self.parsed_obj\
+                                ["services"][container]
             else:
                 if isinstance(self.parsed_obj, dict) and \
                         container in self.parsed_obj:
@@ -302,15 +305,13 @@ class DockerComposeYml(object):
     def services(self):
         if not isinstance(self.parsed_obj, dict):
             return dict()
-        if not self.is_v2:
+        if self.is_v2:
+            if "services" in self.parsed_obj and \
+                    isinstance(self.parsed_obj, dict):
+                return copy.copy(self.parsed_obj["services"])
+            return dict()
+        else:
             return copy.copy(self.parsed_obj)
-        if "services" in self.parsed_obj:
-            result = dict()
-            for key in self.parsed_obj:
-                if key == "version":
-                    continue
-                result[key] = self.parsed_obj[key]
-            return result
         return dict()
 
 class SystemInfo(object):
@@ -2895,7 +2896,7 @@ def main():
             running_names = service._get_running_service_container_names()
             all_names = [container.name for container in service.containers]
             if len(all_names) == 0:
-                state = "\033[1;33mservice has no contianers" +\
+                state = "\033[1;33mservice has no containers" +\
                     "\033[0m"
             elif len(running_names) == len(all_names):
                 state = "\033[1;32mrunning\033[0m"
