@@ -2894,7 +2894,10 @@ def main():
             state = ""
             running_names = service._get_running_service_container_names()
             all_names = [container.name for container in service.containers]
-            if len(running_names) == len(all_names):
+            if len(all_names) == 0:
+                state = "\033[1;33mservice has no contianers" +\
+                    "\033[0m"
+            elif len(running_names) == len(all_names):
                 state = "\033[1;32mrunning\033[0m"
             elif len(running_names) > 0:
                 state = "\033[1;33mpartial (running: " +\
