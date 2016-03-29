@@ -1685,10 +1685,14 @@ class Permissions:
         # Extract permission info from the YAML:
         parsed_obj = yaml.safe_load(contents)
         for k in parsed_obj:
-            print_msg("warning: unrecognized permissions.yml " +\
-                "section: " + str(line),
-                service=self.service.name,
-                color="red")
+            if k in set(["livedata-permissions"]):
+                if isinstance(parsed_obj[k], dict):
+                    perm_dict[k] = parsed_obj[k]
+            else:
+                print_msg("warning: unrecognized permissions.yml " +\
+                    "section: " + str(k),
+                    service=self.service.name,
+                    color="red")
 
         # Make sure some stuff is present:
         if not "livedata-permissions" in perm_dict:
