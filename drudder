@@ -1512,7 +1512,7 @@ class Service(object):
             vol = vol.strip()
             if len(vol) == 0:
                 continue
-            subprocess.check_output([SyStemInfo.docker_path(),
+            subprocess.check_output([SystemInfo.docker_path(),
                 "volume", "rm", vol])
 
     @property
