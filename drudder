@@ -261,8 +261,7 @@ class DockerComposeYml(object):
 
         # Load up .yml contents:
         contents = None
-        with open(os.path.join(self.service_path,
-                "docker-compose.yml"), "rb") as f:
+        with open(path, "rb") as f:
             contents = f.read().decode("utf-8").\
                 replace("\r\n", "\n").\
                 replace("\r", "\n").replace("\t", " ")
@@ -292,7 +291,7 @@ class DockerComposeYml(object):
             else:
                 if isinstance(self.parsed_obj, dict) and \
                         container in self.parsed_obj:
-                    if isinstance(self.parsed_obj[container], dict);
+                    if isinstance(self.parsed_obj[container], dict):
                         self._desired_data = self.parsed_obj[container]
 
     @property
@@ -301,7 +300,7 @@ class DockerComposeYml(object):
 
     @property
     def services(self):
-        if not isinstance(self.parsed_obj):
+        if not isinstance(self.parsed_obj, dict):
             return dict()
         if not self.is_v2:
             return copy.copy(self.parsed_obj)
@@ -1089,7 +1088,7 @@ class ServiceContainer(object):
         yml = DockerComposeYml(self.service_path, self.name)
         if "volumes" in yml.data:
             for line in yml.data["volumes"]:
-                parse_volume_line(parts.split(":"))
+                parse_volume_line(line.split(":"))
         return volumes
 
     def _get_volumes(self, rw_only=False):
