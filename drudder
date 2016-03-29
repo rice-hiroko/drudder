@@ -232,6 +232,9 @@ def yaml_error():
     else:
         print("docker-rudder: error: no PyYaml available. (pip3 is also " +\
             "unavailable??)", file=sys.stderr)
+if not yaml_available:
+    yaml_error()
+    sys.exit(1)
 
 class DoubleLineBreakFormatter(HelpFormatter):
     """ Retains double line breaks/paragraphs """
@@ -246,6 +249,70 @@ class DoubleLineBreakFormatter(HelpFormatter):
             initial_indent=indent, subsequent_indent=indent)\
             for paragraph in ts]
         return "\n\n".join(result)
+
+class DockerComposeYml(object):
+    def __init__(self, path, container=None):
+        # If path just goes to directory, add file name:
+        if os.path.isdir(path):
+            path = os.path.join(path, "docker-compose.yml")
+
+        # Remember path:
+        self.path = path
+
+        # Load up .yml contents:
+        contents = None
+        with open(os.path.join(self.service_path,
+                "docker-compose.yml"), "rb") as f:
+            contents = f.read().decode("utf-8").\
+                replace("\r\n", "\n").\
+                replace("\r", "\n").replace("\t", " ")
+        self.parsed_obj = yaml.safe_load(contents)
+
+        # Extract desired data:
+        self.is_v2 = False
+        self._desired_data = self.parsed_obj
+        if isinstance(self.parsed_obj, dict) and \
+                "version" in self.parsed_obj:
+            v = 0
+            try:
+                v = int(self.parsed_obj["version"])
+            except (TypeError, ValueError):
+                pass
+            if v >= 2:
+                self.is_v2 = True
+        if container != None: # data requested for specific container:
+            self._desired_data = None
+            if self.is_v2:
+                self._desired_data = None
+                if isinstance(self.parsed_obj, dict) and \
+                        "services" in self.parsed_obj:
+                    if container in self.parsed_obj:
+                        if isinstance(self.parsed_obj[container], dict):
+                            self._desired_data = self.parsed_obj[container]
+            else:
+                if isinstance(self.parsed_obj, dict) and \
+                        container in self.parsed_obj:
+                    if isinstance(self.parsed_obj[container], dict);
+                        self._desired_data = self.parsed_obj[container]
+
+    @property
+    def data(self):
+        return self._desired_data
+
+    @property
+    def services(self):
+        if not isinstance(self.parsed_obj):
+            return dict()
+        if not self.is_v2:
+            return copy.copy(self.parsed_obj)
+        if "services" in self.parsed_obj:
+            result = dict()
+            for key in self.parsed_obj:
+                if key == "version":
+                    continue
+                result[key] = self.parsed_obj[key]
+            return result
+        return dict()
 
 class SystemInfo(object):
     """ This class provides system info of various sorts about the installed
@@ -997,6 +1064,8 @@ class ServiceContainer(object):
         """
         volumes = []
         def parse_volume_line(parts):
+            """ Helper function to parse a single volume line """
+
             # Check if read-only or not:
             rwro = "rw"
             if len(parts) >= 3:
@@ -1016,59 +1085,11 @@ class ServiceContainer(object):
             if len(parts) >= 2 and (rwro == "rw" or not rw_only):
                 volumes.append((parts[0], parts[1]))
 
-        f = open(os.path.join(self.service_path,
-            "docker-compose.yml"), "rb")
-        try:
-            contents = f.read().decode("utf-8", "ignore").\
-                replace("\r\n", "\n").\
-                replace("\r", "\n").replace("\t", " ")
-        finally:
-            f.close()
-        try:
-            parsed_obj = yaml.safe_load(contents)
-            if self.name in parsed_obj and \
-                    "volumes" in parsed_obj[self.name]:
-                for line in parsed_obj[self.name]["volumes"]:
-                    parse_volume_line(parts.split(":")) 
-        except NameError:
-            pass
-
-        in_relevant_container_section = False
-        in_volume_list = False
-        for line in contents.split("\n"):
-            if line.strip() == "":
-                continue
-
-            # Figure out whether we are entering/leaving the relevant container
-            # section:
-            if line.startswith(self.name + ":"):
-                in_relevant_container_section = True
-            elif not line.startswith(" ") and \
-                    not line.startswith("\t") and \
-                    line.endswith(":"):
-                in_relevant_container_section = False
-
-            if line.startswith(" ") and (line.strip().startswith("volumes ")
-                    or line.strip().startswith("volumes:")):
-                in_volume_list = True
-
-                # Parse remaining stuff in line:
-                i = line.find("volumes")
-                line = line[i+len("volumes"):].strip()
-                if line.startswith(":"):
-                    line = line[1:].strip()
-                if len(line) == 0:
-                    continue
-
-            if in_volume_list:
-                if not line.strip().startswith("-"):
-                    in_volume_list = False
-                    continue
-                line = line[line.find("-")+1:].strip()
-                if line.startswith("\"") and line.endswith("\""):
-                    line = line[1:-1]
-                parts = line.split(":")
-                parse_volume_line(parts) 
+        # Extract volume lines:
+        yml = DockerComposeYml(self.service_path, self.name)
+        if "volumes" in yml.data:
+            for line in yml.data["volumes"]:
+                parse_volume_line(parts.split(":"))
         return volumes
 
     def _get_volumes(self, rw_only=False):
@@ -1307,65 +1328,18 @@ class Service(object):
             that service.
         """
         links = []
-        with open(os.path.join(self.service_path,
-                "docker-compose.yml"), "rb") as f:
-            contents = f.read().decode("utf-8", "ignore").\
-                replace("\r\n", "\n").\
-                replace("\r", "\n")
-        try:
-            parsed_obj = yaml.safe_load(contents)
-            if not container_name in parsed_obj:
-                raise ValueError("no such container found: " +\
-                    str(container_name))
-            if not "links" in parsed_obj[container_name]:
-                return []
-            return [entry.partition(":")[0] for entry in \
-                parsed_obj[container_name]["links"]]
-        except NameError:
-            # Continue with the YAML parsing hack:
-            pass
-        in_relevant_container_section = False
-        in_links_list = False
-        for line in contents.split("\n"):
-            if line.strip() == "":
-                continue
 
-            # Figure out whether we are entering/leaving the relevant container
-            # section:
-            if line.startswith(container_name + ":"):
-                in_relevant_container_section = True
-            elif not line.startswith(" ") and \
-                    not line.startswith("\t") and \
-                    line.endswith(":"):
-                in_relevant_container_section = False
+        # Get docker-compose.yml data:
+        yml = DockerComposeYml(self.service_path, container_name)
+        if yml.data == None:
+            raise ValueError("no such container found: " +\
+                str(container_name))
 
-            # Detect external_links: subsection:
-            if line.startswith(" ") and (line.strip().\
-                    startswith("links ")
-                    or line.strip().startswith("links:")):
-                in_links_list = True
-
-                # Parse remaining stuff in line:
-                i = line.find("links")
-                line = line[i+len("links"):].strip()
-                if line.startswith(":"):
-                    line = line[1:].strip()
-                if len(line) == 0:
-                    continue
-
-            # Parse entries:
-            if in_links_list:
-                if not line.strip().startswith("-"):
-                    in_links_list = False
-                    continue
-                line = line[line.find("-")+1:].strip()
-                if line.startswith("\"") and line.endswith("\""):
-                    line = line[1:-1].strip()
-                parts = line.split(":")
-                if in_relevant_container_section:
-                    links.append(parts[0])
-        return links
-
+        # Extract link data:
+        if not "links" in yml.data:
+            return []
+        return [entry.partition(":")[0] for entry in \
+            yml.data["links"]]
 
     def _external_docker_compose_links(self, container_name):
         """ Attempt to parse and return all containers referenced as external
@@ -1373,64 +1347,14 @@ class Service(object):
             that service.
         """
         external_links = []
-        with open(os.path.join(self.service_path,
-                "docker-compose.yml"), "rb") as f:
-            contents = f.read().decode("utf-8", "ignore").\
-                replace("\r\n", "\n").\
-                replace("\r", "\n")
-        try:
-            parsed_obj = yaml.safe_load(contents)
-            if not container_name in parsed_obj:
-                raise ValueError("no such container found: " +\
-                    str(container_name))
-            if not "external_links" in parsed_obj[container_name]:
-                return []
-            return [entry.partition(":")[0] for entry in \
-                parsed_obj[container_name]["external_links"]]
-        except NameError:
-            # Continue with the YAML parsing hack:
-            pass
-        in_relevant_container_section = False
-        in_external_links_list = False
-        for line in contents.split("\n"):
-            if line.strip() == "":
-                continue
-
-            # Figure out whether we are entering/leaving the relevant container
-            # section:
-            if line.startswith(container_name + ":"):
-                in_relevant_container_section = True
-            elif not line.startswith(" ") and \
-                    not line.startswith("\t") and \
-                    line.endswith(":"):
-                in_relevant_container_section = False
-
-            # Detect external_links: subsection:
-            if line.startswith(" ") and (line.strip().\
-                    startswith("external_links ")
-                    or line.strip().startswith("external_links:")):
-                in_external_links_list = True
-
-                # Parse remaining stuff in line:
-                i = line.find("external_links")
-                line = line[i+len("external_links"):].strip()
-                if line.startswith(":"):
-                    line = line[1:].strip()
-                if len(line) == 0:
-                    continue
-
-            # Parse entries:
-            if in_external_links_list:
-                if not line.strip().startswith("-"):
-                    in_external_links_list = False
-                    continue
-                line = line[line.find("-")+1:].strip()
-                if line.startswith("\"") and line.endswith("\""):
-                    line = line[1:-1].strip()
-                parts = line.split(":")
-                if in_relevant_container_section:
-                    external_links.append(parts[0])
-        return external_links
+        yml = DockerComposeYml(self.service_path, container_name)
+        if yml.data == None:
+            raise ValueError("no such container found: " +\
+                str(container_name))
+        if not "external_links" in yml.data:
+            return []
+        return [entry.partition(":")[0] for entry in \
+            yml.data["external_links"]]
 
     def get_running_containers(self):
         """ Get only the containers of this service which are currently up and
@@ -1520,88 +1444,27 @@ class Service(object):
         """ Get all containers specified for the given service's
             docker-compose.yml.
         """
-        with open(os.path.join(self.service_path,
-                "docker-compose.yml"), "rb") as f:
-            contents = f.read().decode("utf-8", "ignore").\
-                replace("\r\n", "\n").\
-                replace("\r", "\n").replace("\t", " ")
-
-        # See if YAML parsing works (depending on pyyaml being installed):
-        parsed_obj = None
-        try:
-            parsed_obj = yaml.safe_load(contents)
-        except NameError:
-            pass
-
         results = []
 
-        # Assemble results if YAML parsing worked:
-        if parsed_obj != None:
-            for container_name in parsed_obj:
-                for property_name in parsed_obj[container_name]:
-                    value = parsed_obj[container_name][property_name]
-                    if property_name == "image":
-                        # This container is constructed from an image:
-                        image_name = value
-
-                        # This is the resulting container name:
-                        results.append(ServiceContainer(
-                            self.name, self.service_path,
-                            container_name,
-                            image_name=image_name))
-                    elif property_name == "build":
-                        results.append(ServiceContainer(
-                            self.name, self.service_path,
-                            container_name))
-            return results
-
-        # Parse with our hacky YAML pseudo-parsing:
-        smallest_observed_indentation = 999
-        def count_indentation(line):
-            i = 0
-            while i < len(line) and line[i] == " ":
-                i += 1
-            return i
-        current_container_name = None
-        i = 0
-        for line in contents.split("\n"):
-            next_line = None
-            i += 1
-            if i < len(contents):
-                next_line = contents[i]
-
-            if not (line.startswith(" ")):
-                # This is the container name:
-                current_container_name = line.partition(":")[0].strip().\
-                    partition(" ")[0]
-            elif count_indentation(line) <= smallest_observed_indentation:
-                # This is a line inside the service declaration.
-                keyword = line.partition(":")[0].strip().partition(" ")[0]
-                value = line.partition(":")[2].strip()
-                if len(value) == 0:
-                    value = next_line.strip()
-                if keyword == "build":
-                    # This service build from a directory.
-                    # Get the name of the directory:
-                    build_path = os.path.normpath(\
-                        os.path.join(service_path, value))
-                    while build_path.endswith("/"):
-                        build_path = build_path[:-1]
-                    build_name = os.path.basename(build_path).replace("-", "")
-                    
-                    # This is the resulting container name:
-                    results.append(ServiceContainer(
-                        self.name, self.service_path,
-                        current_container_name))
-                elif keyword == "image":
+        # Assemble results:
+        yml = DockerComposeYml(self.service_path)
+        for container_name in yml.services:
+            if not isinstance(yml.services[container_name], dict):
+                continue
+            for property_name in yml.services[container_name]:
+                value = yml.services[container_name][property_name]
+                if property_name == "image":
                     # This container is constructed from an image:
                     image_name = value
-
-                    # This is the resulting container name:
                     results.append(ServiceContainer(
                         self.name, self.service_path,
-                        current_container_name,
+                        container_name,
                         image_name=image_name))
+                elif property_name == "build":
+                    # Built from a directory with Dockerfile:
+                    results.append(ServiceContainer(
+                        self.name, self.service_path,
+                        container_name))
         return results
 
 class FailedLaunchTracker(object):
@@ -1797,71 +1660,25 @@ class Permissions:
         perm_dict = dict()
         current_area = None
         try:
-            contents = f.read().decode("utf-8", "ignore").\
+            contents = f.read().decode("utf-8").\
                 replace("\r\n", "\n").\
                 replace("\r", "\n").replace("\t", " ")
         finally:
             f.close()
 
-        # Try proper parsing with the YAML parser:
-        try:
-            parsed_obj = yaml.safe_load(contents)
-            for k in parsed_obj:
-                print_msg("warning: unrecognized permissions.yml " +\
-                        "section: " + str(line),
-                        service=self.service.name,
-                        color="red")
-            if not "livedata-permissions" in parsed_obj:
-                parsed_obj["livedata-permissions"] = dict()
-            return parsed_obj
-        except NameError:
-            pass
+        # Extract permission info from the YAML:
+        parsed_obj = yaml.safe_load(contents)
+        for k in parsed_obj:
+            print_msg("warning: unrecognized permissions.yml " +\
+                "section: " + str(line),
+                service=self.service.name,
+                color="red")
 
-        # Hack for unavailable YAML parser:
-        for line in contents.split("\n"):
-            if line.strip() == "":
-                continue
-            if not line.startswith(" ") and not line.startswith("\t"):
-                line = line.strip()
-                if not line.endswith(":"):
-                    print_msg("error: syntax error in permissions.yml: " +\
-                        "colon expected",
-                        service=self.service.name, color="red")
-                    raise RuntimeError("invalid syntax")
-                line = line[:-1]
-                # this specifies the current area
-                if line == "livedata-permissions":
-                    current_area = "livedata-permissions"
-                else:
-                    print_msg("warning: unrecognized permissions.yml " +\
-                        "section: " + str(line),
-                        service=self.service.name,
-                        color="red")
-                    continue
-                if not current_area in perm_dict:
-                    perm_dict[current_area] = dict()
-                continue
-            elif line.startswith(" ") or line.startswith("\t"):
-                if current_area == None:
-                    print_msg("error: syntax error in permissions.yml: " +\
-                        "unexpected value outside of block",
-                        service=self.service.name, color="red")
-                    raise RuntimeError("invalid syntax")
-                k = line.partition(":")[0].strip()
-                v = line.partition(":")[2].strip()
-                perm_dict[current_area][k] = v
-
-                continue
-        
         # Make sure some stuff is present:
         if not "livedata-permissions" in perm_dict:
             perm_dict["livedata-permissions"] = dict()
 
         return perm_dict
-
-if not yaml_available:
-    yaml_error()
-    sys.exit(1)
 
 parser = argparse.ArgumentParser(description=textwrap.dedent('''\
     docker-rudder: a tool to simply managing a larger collection of
