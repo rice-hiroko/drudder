@@ -1237,9 +1237,25 @@ class Service(object):
         """ Get a global list of all detected services.
         """
         services = []
+        scanned = set()
         def scan_dir(d):
+            """ Scan a given directory for containers. """
+
+            if not os.path.exists(d):
+                return
+
+            # Only scan directories:
             if not os.path.isdir(d):
                 return
+
+            # Duplicate avoidance:
+            normd = os.path.normpath(os.path.abspath(
+                os.path.realpath(d)))
+            if normd in scanned:
+                return
+            scanned.add(normd)
+
+            # Scan it:
             d = os.path.abspath(d)
             for f in os.listdir(d):
                 if not os.path.isdir(os.path.join(d, f)):
@@ -1249,11 +1265,11 @@ class Service(object):
                     continue
                 services.append(Service(f, 
                     os.path.normpath(os.path.join(d, f))))
+
+        # Schedule some common places for scanning:
         scan_dir(os.getcwd())
-        if os.path.exists("/usr/share/docker-services"):
-            scan_dir("/usr/share/docker-services")
-        if os.path.exists("/srv"):
-            scan_dir("/srv")
+        scan_dir("/usr/share/docker-services")
+        scan_dir("/srv")
         return services
 
     def _fix_container_name(self, container_name):
