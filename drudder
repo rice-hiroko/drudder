@@ -1615,7 +1615,7 @@ class LaunchThreaded(threading.Thread):
                     color="red")
                 if self.failed_launch_tracker != None:
                     self.failed_launch_tracker.add(self.container)
-                self.do_on_success()
+                self.do_on_failure()
                 raise e
         except Exception as e:
             print("UNEXPECTED ERROR", file=sys.stderr)
@@ -3175,22 +3175,27 @@ def main():
             if t != None:
                 threads.append(t)
 
+        def mark_success_func(net, container):
+            return lambda: net.mark_success(container)
+
+        def mark_failure_func(net, container):
+            return lambda: net.mark_failure(container)
+
         # Start the dependencies of our container launch set:
         start_dependency_containers = \
             DoAlongDependencyEdges(resolution, containers,
             along_incoming=False, expand_initial_set=True,
             reverse_yield_order=True)
         for container in start_dependency_containers.unprocessed_containers():
-            current_container = container
-            if current_container in containers: # not a dependency
-                start_dependency_containers.mark_success(current_container)
+            if container in containers: # not a dependency
+                start_dependency_containers.mark_success(container)
                 continue
             # Launch it:
             start_container(container, is_last=False,
-                do_on_failure=lambda: \
-                start_dependency_containers.mark_failure(current_container),
-                do_on_success=lambda: \
-                start_dependency_containers.mark_success(current_container))
+                do_on_failure=mark_failure_func(
+                    start_dependency_containers, container),
+                do_on_success=mark_success_func(
+                    start_dependency_containers, container))
 
         # Start everything again:
         start_containers = \
@@ -3200,10 +3205,12 @@ def main():
                 reverse_yield_order=True)
         for container in start_containers.unprocessed_containers():
             start_container(container, is_last=False,
-                do_on_failure=lambda: \
-                start_containers.mark_failure(container),
-                do_on_success=lambda: \
-                start_containers.mark_success(container))
+                do_on_failure=mark_failure_func(
+                    start_containers, container),
+                do_on_success=mark_success_func(
+                    start_containers, container))
+
+        # Wait until launches are finished:
         LaunchThreaded.wait_for_launches(threads)
         if len(tracker) > 0:
             print("drudder: error: some launches failed.",
