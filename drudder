@@ -2499,6 +2499,11 @@ class DoAlongDependencyEdges(object):
                         # Nope, at least one predecessor isn't done yet.
                         reachable = False
                         break
+                    if predecessor in self.marked_failed:
+                        # Whoops, this should also be marked failed.
+                        self.marked_failed.add(next_node.container)
+                        reachable = False
+                        break
                 if reachable:
                     candidates.append(next_node)
             else:
