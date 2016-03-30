@@ -216,104 +216,6 @@ except ImportError:
     yaml_available = False
     pass
 
-def yaml_error():
-    print("docker-rudder: error: no PyYAML available.", file=sys.stderr)
-    pip_name = "pip3"
-    if SystemInfo.locate_binary(pip_name) == None:
-        pip_name = "python3-pip"
-        if SystemInfo.locate_binary(pip_name) == None:
-            pip_name = "python-pip3"
-            if SystemInfo.locate_binary(pip_name) == None:
-                pip_name = None
-    if pip_name != None:
-        print("docker-rudder: error: no PyYAML available. " +\
-            "Install PyYAML using:", file=sys.stderr)
-        print("    sudo " + pip_name + " install pyyaml")
-    else:
-        print("docker-rudder: error: no PyYaml available. (pip3 is also " +\
-            "unavailable??)", file=sys.stderr)
-if not yaml_available:
-    yaml_error()
-    sys.exit(1)
-
-class DoubleLineBreakFormatter(HelpFormatter):
-    """ Retains double line breaks/paragraphs """
-    def _split_lines(self, text, width):
-        return self._fill_text(text, width, "").splitlines(False)
-
-    def _fill_text(self, t, width, indent):
-        t = " ".join([s for s in t.replace("\t", " ").strip("\t ").split(" ")\
-            if len(s) > 0]).replace("\n ", "\n").replace(" \n", " ")
-        ts = re.sub("([^\n])\n([^\n])", "\\1 \\2", t).split("\n\n")
-        result = [textwrap.fill(paragraph, width,
-            initial_indent=indent, subsequent_indent=indent)\
-            for paragraph in ts]
-        return "\n\n".join(result)
-
-class DockerComposeYml(object):
-    def __init__(self, path, container=None):
-        # If path just goes to directory, add file name:
-        if os.path.isdir(path):
-            path = os.path.join(path, "docker-compose.yml")
-
-        # Remember path:
-        self.path = path
-
-        # Load up .yml contents:
-        contents = None
-        with open(path, "rb") as f:
-            contents = f.read().decode("utf-8").\
-                replace("\r\n", "\n").\
-                replace("\r", "\n").replace("\t", " ")
-        self.parsed_obj = yaml.safe_load(contents)
-
-        # Extract desired data:
-        self.is_v2 = False
-        self._desired_data = self.parsed_obj
-        if isinstance(self.parsed_obj, dict) and \
-                "version" in self.parsed_obj:
-            v = 0
-            try:
-                v = int(self.parsed_obj["version"])
-            except (TypeError, ValueError):
-                pass
-            if v >= 2:
-                self.is_v2 = True
-        if container != None: # data requested for specific container:
-            self._desired_data = None
-            if self.is_v2:
-                self._desired_data = None
-                if isinstance(self.parsed_obj, dict) and \
-                        "services" in self.parsed_obj:
-                    if isinstance(self.parsed_obj["services"], dict) and \
-                            container in self.parsed_obj["services"]:
-                        if isinstance(self.parsed_obj["services"]\
-                                [container], dict):
-                            self._desired_data = self.parsed_obj\
-                                ["services"][container]
-            else:
-                if isinstance(self.parsed_obj, dict) and \
-                        container in self.parsed_obj:
-                    if isinstance(self.parsed_obj[container], dict):
-                        self._desired_data = self.parsed_obj[container]
-
-    @property
-    def data(self):
-        return self._desired_data
-
-    @property
-    def services(self):
-        if not isinstance(self.parsed_obj, dict):
-            return dict()
-        if self.is_v2:
-            if "services" in self.parsed_obj and \
-                    isinstance(self.parsed_obj, dict):
-                return copy.copy(self.parsed_obj["services"])
-            return dict()
-        else:
-            return copy.copy(self.parsed_obj)
-        return dict()
-
 class SystemInfo(object):
     """ This class provides system info of various sorts about the installed
         docker versions, btrfs and more.
@@ -655,6 +557,104 @@ class SystemInfo(object):
         output = subprocess.check_output([locate_binary("stat"),
             "-c", "%i", path]).decode('utf-8', 'ignore').strip()
         return (output == "256")
+
+def yaml_error():
+    print("docker-rudder: error: no PyYAML available.", file=sys.stderr)
+    pip_name = "pip3"
+    if SystemInfo.locate_binary(pip_name) == None:
+        pip_name = "python3-pip"
+        if SystemInfo.locate_binary(pip_name) == None:
+            pip_name = "python-pip3"
+            if SystemInfo.locate_binary(pip_name) == None:
+                pip_name = None
+    if pip_name != None:
+        print("docker-rudder: error: no PyYAML available. " +\
+            "Install PyYAML using:", file=sys.stderr)
+        print("    sudo " + pip_name + " install pyyaml")
+    else:
+        print("docker-rudder: error: no PyYaml available. (pip3 is also " +\
+            "unavailable??)", file=sys.stderr)
+if not yaml_available:
+    yaml_error()
+    sys.exit(1)
+
+class DoubleLineBreakFormatter(HelpFormatter):
+    """ Retains double line breaks/paragraphs """
+    def _split_lines(self, text, width):
+        return self._fill_text(text, width, "").splitlines(False)
+
+    def _fill_text(self, t, width, indent):
+        t = " ".join([s for s in t.replace("\t", " ").strip("\t ").split(" ")\
+            if len(s) > 0]).replace("\n ", "\n").replace(" \n", " ")
+        ts = re.sub("([^\n])\n([^\n])", "\\1 \\2", t).split("\n\n")
+        result = [textwrap.fill(paragraph, width,
+            initial_indent=indent, subsequent_indent=indent)\
+            for paragraph in ts]
+        return "\n\n".join(result)
+
+class DockerComposeYml(object):
+    def __init__(self, path, container=None):
+        # If path just goes to directory, add file name:
+        if os.path.isdir(path):
+            path = os.path.join(path, "docker-compose.yml")
+
+        # Remember path:
+        self.path = path
+
+        # Load up .yml contents:
+        contents = None
+        with open(path, "rb") as f:
+            contents = f.read().decode("utf-8").\
+                replace("\r\n", "\n").\
+                replace("\r", "\n").replace("\t", " ")
+        self.parsed_obj = yaml.safe_load(contents)
+
+        # Extract desired data:
+        self.is_v2 = False
+        self._desired_data = self.parsed_obj
+        if isinstance(self.parsed_obj, dict) and \
+                "version" in self.parsed_obj:
+            v = 0
+            try:
+                v = int(self.parsed_obj["version"])
+            except (TypeError, ValueError):
+                pass
+            if v >= 2:
+                self.is_v2 = True
+        if container != None: # data requested for specific container:
+            self._desired_data = None
+            if self.is_v2:
+                self._desired_data = None
+                if isinstance(self.parsed_obj, dict) and \
+                        "services" in self.parsed_obj:
+                    if isinstance(self.parsed_obj["services"], dict) and \
+                            container in self.parsed_obj["services"]:
+                        if isinstance(self.parsed_obj["services"]\
+                                [container], dict):
+                            self._desired_data = self.parsed_obj\
+                                ["services"][container]
+            else:
+                if isinstance(self.parsed_obj, dict) and \
+                        container in self.parsed_obj:
+                    if isinstance(self.parsed_obj[container], dict):
+                        self._desired_data = self.parsed_obj[container]
+
+    @property
+    def data(self):
+        return self._desired_data
+
+    @property
+    def services(self):
+        if not isinstance(self.parsed_obj, dict):
+            return dict()
+        if self.is_v2:
+            if "services" in self.parsed_obj and \
+                    isinstance(self.parsed_obj, dict):
+                return copy.copy(self.parsed_obj["services"])
+            return dict()
+        else:
+            return copy.copy(self.parsed_obj)
+        return dict()
 
 def print_msg(text, service=None, container=None, color="blue"):
     """ Print out a nicely formatted message prefixed with
