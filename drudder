@@ -26,15 +26,17 @@ freely, subject to the following restrictions:
 
     ## Motivation
 
-    **docker-rudder** is a tool which operates on top of docker and
-    docker-compose. It doesn't add any notable new features (other than btrfs
-    snapshot handling): instead it tries to offer a well-thought-out interface
-    to simplify all the required daily tasks needed for managing your docker
+    **drudder** is a tool which operates on top of docker and docker-compose to
+    introduce a simpler and more powerful API.
+    It doesn't add any notable new features (other than btrfs snapshot
+    handling): instead it tries to offer a well-thought-out interface to
+    simplify all the required daily tasks needed for managing your docker
     containers.
 
-    It unifies some tasks requiring multiple commands with the regular docker
-    interfaces in single quick commands with sensible defaults and satefy
-    checks.
+    **drudder** is not a fully fledged orchestration tool and is mainly useful
+    if you have a single smaller production server where all software runs on.
+    If you want to control a huge docker cloud on multiple physical machines,
+    go elsewhere.
 
 
     ## Features
@@ -99,7 +101,7 @@ freely, subject to the following restrictions:
 
     # HOW TO add your service
 
-    docker-rudder expects services grouped with docker-compose /
+    drudder expects services to be grouped with the help of docker-compose /
     docker-compose.yml. The script will scan the following locations for
     services subfolders with a docker-compose.yml in them:
 
@@ -116,25 +118,25 @@ freely, subject to the following restrictions:
     To list all currently recognized services, type: `drudder list`
 
     Congratulations, you can now manage launch your service(s) with
-    docker-rudder!
+    drudder!
 
 
 
     # HOW TO backup
 
-    You should backup all your services. docker-rudder provides snapshot
+    You should backup all your services. drudder provides snapshot
     functionality to help with this. While you could simply copy your service
     folder with all the mounted volumes in it, this can lead to corrupt copies
     when doing this while some services are operating (SQL databases etc.).
 
-    To use docker-rudder snapshots of your writable volumes during service
+    To use drudder snapshots of your writable volumes during service
     operation, do this:
 
     1. Enable snapshots as described below
 
-    2. Always run "docker-rudder snapshot all" before you make your backup
-       to get consistent snapshots of your writable volumes in a subfolder
-       named livedata-snapshpots/ in each respective service folder.
+    2. Always run "drudder snapshot all" before you make your backup to get
+       consistent snapshots of your writable volumes in a subfolder named
+       livedata-snapshpots/ in each respective service folder.
 
 
 
@@ -247,7 +249,7 @@ class SystemInfo(object):
             stdout=None, stderr=None, timeout=None, env=None):
         """ This is a re-implementation of subprocess.check_output() which
             will isolate the child process in a pseudo-TTY to prevent it from
-            accessing the main terminal itself where docker-rudder itself is
+            accessing the main terminal itself where drudder itself is
             running from.
         """
         if cwd == None:
@@ -331,7 +333,7 @@ class SystemInfo(object):
                 continue
             if behaves_like_docker(bin_path):
                 return bin_path
-        print("docker-rudder: error: no docker found. Is it installed?")
+        print("drudder: error: no docker found. Is it installed?")
         sys.exit(1)
     
     @staticmethod
@@ -350,7 +352,7 @@ class SystemInfo(object):
         base_path = os.path.normpath(path + "/../")
         mount = SystemInfo.get_fs_mount_root(base_path)
         if mount == None:
-            print("docker-rudder: warning: internal problem: " +\
+            print("drudder: warning: internal problem: " +\
                 "mount point of " +\
                 str(base_path) + " was returned as: None")
             details = "cannot check path. Mount point search failed: " +\
@@ -426,7 +428,7 @@ class SystemInfo(object):
         bin_path = SystemInfo.locate_binary("docker-compose")
         if bin_path != None:
             return bin_path
-        print("docker-rudder: error: no docker-compose found. " + \
+        print("drudder: error: no docker-compose found. " + \
             "Is it installed?")
         sys.exit(1)
 
@@ -569,11 +571,11 @@ def yaml_error():
             if SystemInfo.locate_binary(pip_name) == None:
                 pip_name = None
     if pip_name != None:
-        print("docker-rudder: error: no PyYAML available. " +\
+        print("drudder: error: no PyYAML available. " +\
             "Install PyYAML using:", file=sys.stderr)
         print("    sudo " + pip_name + " install pyyaml")
     else:
-        print("docker-rudder: error: no PyYaml available. (pip3 is also " +\
+        print("drudder: error: no PyYaml available. (pip3 is also " +\
             "unavailable??)", file=sys.stderr)
 if not yaml_available:
     yaml_error()
@@ -659,7 +661,7 @@ class DockerComposeYml(object):
 
 def print_msg(text, service=None, container=None, color="blue"):
     """ Print out a nicely formatted message prefixed with
-        [docker-rudder] and/or possibly a service or container name.
+        [drudder] and/or possibly a service or container name.
 
         You can specify a signal color, with red and yellow changing the
         displayed message type from INFO to ERROR or WARNING respectively.
@@ -694,9 +696,9 @@ def print_msg(text, service=None, container=None, color="blue"):
 
     docker_services_part = ""
     if service == None or len(service) == 0:
-        docker_services_part = color_code() + "docker-rudder"
+        docker_services_part = color_code() + "drudder"
 
-    initial_length = len("[docker-rudder")
+    initial_length = len("[drudder")
     if service != None:
         initial_length = len("[" + service)
         if container != None:
@@ -802,7 +804,7 @@ class DataVolume(object):
             DEVELOPER NOTE (Jonas Thiem):
             In theory, a volume that is purely a host directory mount can be
             used by multiple containers of course. However, right now
-            docker-rudder only builds up volume information per container, and
+            drudder only builds up volume information per container, and
             therefore this container-centric approach is sufficient for now.
             However, later this should be changed to allow multiple owning
             containers.
@@ -1409,7 +1411,7 @@ class Service(object):
                 "with --force)\n\n" +\
                 "Are you sure you want to continue? [Enter y/N]")
             if not answer == "y" and not answer == "Y":
-                print("docker-rudder: error: cleaning was aborted "+\
+                print("drudder: error: cleaning was aborted "+\
                     "by user.", file=sys.stderr)
                 sys.exit(1)
         print_msg("cleaning up stopped containers...")
@@ -1702,8 +1704,8 @@ class Permissions:
         return perm_dict
 
 parser = argparse.ArgumentParser(description=textwrap.dedent('''\
-    docker-rudder: a tool to simply managing a larger collection of
-    docker-compose.yml-specified container groups.'''
+    drudder: a tool for managing a larger collection of
+    docker-compose.yml-specified container groups simply.'''
     ),
     formatter_class=DoubleLineBreakFormatter)
 parser.add_argument("action",
@@ -1737,7 +1739,7 @@ parser.add_argument("action",
 
     "dump-container-info" : dump all sorts of detailed container info as YAML.
                             Mainly useful if you want to process the combined
-                            data computed by docker-rudder with another tool
+                            data computed by drudder with another tool
                             of yours.
     ''')
 
@@ -1757,7 +1759,7 @@ if len(" ".join(sys.argv[1:]).strip()) == 0:
     sys.exit(1)
 for arg in sys.argv[1:]:
     if arg == "--version" or arg == "-v" or arg == "-V":
-        print("docker-rudder version " + str(TOOL_VERSION))
+        print("drudder version " + str(TOOL_VERSION))
         sys.exit(0)
 args = parser.parse_args()
 
@@ -1770,9 +1772,9 @@ class Snapshots(object):
 
     def check_running_snapshot_transaction(self):
         if os.path.exists(os.path.join(
-                self.service.service_path, ".docker-rudder-snapshot.lock")):
+                self.service.service_path, ".drudder-snapshot.lock")):
             output = subprocess.check_output(
-                "ps aux | grep docker-rudder | grep -v grep | wc -l",
+                "ps aux | grep drudder | grep -v grep | wc -l",
                 shell=True).decode("utf-8", "ignore")
             if output.strip() != "1":
                 # Another copy still running??
@@ -1782,7 +1784,7 @@ class Snapshots(object):
                 color="yellow", service=self.service.name)
             # No longer running, remove file:
             os.remove(os.path.join(self.service.service_path,
-                ".docker-rudder-snapshot.lock"))
+                ".drudder-snapshot.lock"))
         return False
 
     @staticmethod
@@ -1833,11 +1835,11 @@ class Snapshots(object):
                                 "still need to be converted to " +\
                                 "a subvolume to enable snapshots.\n" + \
                                 "Fix it by doing this:\n" + \
-                                "1. Stop the service with: docker-rudder "+\
+                                "1. Stop the service with: drudder "+\
                                     "stop " +\
                                     self.service.name + "\n" + \
                                 "2. Snapshot the service once with: " +\
-                                    "docker-rudder "+\
+                                    "drudder "+\
                                     "snapshot " + self.service.name + "\n",
                                 service=self.service.name, color="yellow")
                     else:
@@ -1846,7 +1848,7 @@ class Snapshots(object):
                                 "this service still " +\
                                 "needs conversion to btrfs subvolume.\n" +\
                                 "Fix it by snapshotting it once with: " +\
-                                "docker-rudder "+\
+                                "drudder "+\
                                 "snapshot " + self.service.name + "\n",
                                 service=self.service.name, color="yellow")
                     return False
@@ -1869,7 +1871,7 @@ class Snapshots(object):
             print_msg("error: snapshot already in progress. " +\
                 "try again later", service=self.service.name,
                 color="red")
-            print_msg("remove .docker-rudder-snapshot.lock if you " +\
+            print_msg("remove .drudder-snapshot.lock if you " +\
                 "are sure that is incorrect", service=self.service.name)
             return False
 
@@ -1965,14 +1967,14 @@ class Snapshots(object):
                 return False
 
         lock_path = os.path.join(self.service.service_path,
-            ".docker-rudder-snapshot.lock")
+            ".drudder-snapshot.lock")
 
         # Check there is still no transaction running:
         if self.check_running_snapshot_transaction():
             print_msg("error: snapshot already in progress. " +\
                 "try again later", service=self.service.name,
                 color="red")
-            print_msg("remove .docker-rudder-snapshot.lock if you are " +\
+            print_msg("remove .drudder-snapshot.lock if you are " +\
                 "sure this is incorrect", service=self.service.name)
             return False
 
@@ -2214,7 +2216,7 @@ class TargetsParser(object):
             service = Service.find_by_name(service_name)
             if service == None:
                 if print_error:
-                    print("docker-rudder: error: " + \
+                    print("drudder: error: " + \
                         "no such service found: " + str(service_name),
                         file=sys.stderr)
                 return None
@@ -2235,7 +2237,7 @@ class TargetsParser(object):
                 # Check if the container was found by name or not:
                 if len(containers) == 0:
                     if print_error:
-                        print("docker-rudder: error: " + \
+                        print("drudder: error: " + \
                             "no such container for service \"" +\
                             str(service_name) + "\" found: " +\
                             str(container_name),
@@ -2282,7 +2284,7 @@ class TargetsParser(object):
             service = Service.find_by_name(target.partition("/")[0])
             if service == None:
                 if print_error:
-                    print("docker-rudder: error: " + \
+                    print("drudder: error: " + \
                         "no such service found: " + str(
                         target.partition("/")[0]),
                         file=sys.stderr)
@@ -2519,14 +2521,18 @@ class DoAlongDependencyEdges(object):
             unprocessed_containers() as next unprocessed containers to be
             taken care of.
         """
+        self.access_lock.acquire()
         self.marked_done.add(self.graph[container])
+        self.access_lock.release()
 
     def mark_failure(self, container):
         """ Mark a container as failed. No container depending on this one
             will be considered for yielding for unprocessed_containers()
             anymore.
         """
+        self.access_lock.acquire()
         self.marked_failed.add(self.graph[container])
+        self.access_lock.release()
 
     def _next_unprocessed_node(self):
         """ Note: internal function, use unprocessed_nodes() iterator instead.
@@ -2684,7 +2690,7 @@ class ContainerLinkDependencyResolution(object):
                     try:
                         dep_container = dependency.container
                     except ValueError:
-                        print("docker-rudder: error: dependency for " +\
+                        print("drudder: error: dependency for " +\
                             str(container) + " is not in known services, " +\
                             "can't resolve dependency chain: " +\
                             str(dependency), file=sys.stderr)
@@ -2804,8 +2810,8 @@ def main():
         sys.exit(1)
 
     parser = argparse.ArgumentParser(description=textwrap.dedent('''\
-        docker-rudder: a tool to simply managing a larger collection of
-        docker-compose.yml-specified container groups.'''
+        drudder: a tool for managing a larger collection of
+        docker-compose.yml-specified container groups simply.'''
         ),
         formatter_class=DoubleLineBreakFormatter)
     parser.add_argument("action",
@@ -2839,7 +2845,7 @@ def main():
 
         "dump-container-info" : dump all sorts of detailed container info as YAML.
                                 Mainly useful if you want to process the combined
-                                data computed by docker-rudder with another tool
+                                data computed by drudder with another tool
                                 of yours.
         ''')
 
@@ -2860,7 +2866,7 @@ def main():
         sys.exit(1)
     for arg in sys.argv[1:]:
         if arg == "--version" or arg == "-v" or arg == "-V":
-            print("docker-rudder version " + str(TOOL_VERSION))
+            print("drudder version " + str(TOOL_VERSION))
             sys.exit(0)
     args = parser.parse_args()
 
@@ -2869,10 +2875,10 @@ def main():
 
 
     def unknown_action(hint=None):
-        """ Print an error that the given action to docker-rudder is invalid,
+        """ Print an error that the given action to drudder is invalid,
             with a possible hint to suggest another action.
         """
-        print("docker-rudder: error: unknown action: " + \
+        print("drudder: error: unknown action: " + \
             args.action, file=sys.stderr)
         if hint != None:
             print("Did you mean: " + str(hint) + "?")
@@ -2889,18 +2895,18 @@ def main():
         # Old-style error message:
         if error_output.find("dial unix") >= 0 and \
                 error_output.find("no such file or directory") >= 0:
-            print("docker-rudder: error: " + \
+            print("drudder: error: " + \
                 "docker daemon appears to be not running." +\
                 " Please start it and ensure it is reachable.")
             sys.exit(1)
         # Newer error message:
         elif error_output.find("Cannot connect to the Docker daemon") >= 0:
-            print("docker-rudder: error: " + \
+            print("drudder: error: " + \
                 "docker daemon appears to be not running." +\
                 " Please start it and ensure it is reachable.")
             sys.exit(1)
         else:
-            print("docker-rudder: error: " + \
+            print("drudder: error: " + \
                 "there appears to be some unknown problem with " + \
                 "docker! (test run of \"docker ps\" returned error code)")
             sys.exit(1)
@@ -2940,7 +2946,7 @@ def main():
         sys.exit(1)
     elif args.action == "logs":
         if len(args.argument) == 0:
-            print("docker-rudder: error: please specify the name " + \
+            print("drudder: error: please specify the name " + \
                 "of the service for which docker logs shold be printed, "+\
                 "or \"all\"", file=sys.stderr)
             sys.exit(1)
@@ -2966,7 +2972,7 @@ def main():
                 pass
     elif args.action == "rebuild":
         if len(args.argument) == 0:
-            print("docker-rudder: error: please specify the name " + \
+            print("drudder: error: please specify the name " + \
                 "of the service for which an interactive shell " +\
                 "should be started",
                 file=sys.stderr)
@@ -2983,7 +2989,7 @@ def main():
                     str(", ".join([
                         str(container) for container in containers])),
                     color="red")
-                print("docker-rudder: error: aborted rebuilding")
+                print("drudder: error: aborted rebuilding")
                 sys.exit(1)
         some_failed = False
         for container in containers:
@@ -3006,7 +3012,7 @@ def main():
         sys.exit(0)
     elif args.action == "shell":
         if len(args.argument) == 0:
-            print("docker-rudder: error: please specify the name " + \
+            print("drudder: error: please specify the name " + \
                 "of the service for which an interactive " +\
                 "shell should be started",
                 file=sys.stderr)
@@ -3016,7 +3022,7 @@ def main():
         if containers == None:
             sys.exit(1)
         if len(containers) != 1:
-            print("docker-rudder: error: this command can only be used " + \
+            print("drudder: error: this command can only be used " + \
                 "on a single container, but the given argument \"" +\
                 " ".join(args.argument) +\
                 "\" matches multiple " +\
@@ -3045,7 +3051,7 @@ def main():
                 cwd=containers[0].service.service_path)
     elif args.action == "start" or args.action == "restart":
         if len(args.argument) == 0:
-            print("docker-rudder: error: please specify the name " + \
+            print("drudder: error: please specify the name " + \
                 "of the service to be started, or \"all\"", file=sys.stderr)
             sys.exit(1)
         containers = TargetsParser.get_containers(" ".join(args.argument),
@@ -3172,14 +3178,14 @@ def main():
                 start_containers.mark_success(container))
         LaunchThreaded.wait_for_launches(threads)
         if len(tracker) > 0:
-            print("docker-rudder: error: some launches failed.",
+            print("drudder: error: some launches failed.",
                 file=sys.stderr)
             sys.exit(1)
         else:
             sys.exit(0)
     elif args.action == "stop":
         if len(args.argument) == 0:
-            print("docker-rudder: error: please specify the name " + \
+            print("drudder: error: please specify the name " + \
                 "of the service to be stopped, or \"all\"", file=sys.stderr)
             sys.exit(1)
         containers = TargetsParser.get_containers(" ".join(args.argument),
@@ -3203,7 +3209,7 @@ def main():
         sys.exit(0)
     elif args.action == "snapshot":
         if len(args.argument) == 0:
-            print("docker-rudder: error: please specify the name " + \
+            print("drudder: error: please specify the name " + \
                 "of the service to be snapshotted, or \"all\"",
                 file=sys.stderr)
             sys.exit(1)
@@ -3222,14 +3228,14 @@ def main():
             if not snapshots.do():
                 return_error = True
         if return_error:
-            print("docker-rudder: error: some snapshots failed.",
+            print("drudder: error: some snapshots failed.",
                 file=sys.stderr)
             sys.exit(1)
         else:
             sys.exit(0)
     elif args.action == "info":
         if len(args.argument) == 0:
-            print("docker-rudder: error: please specify the name " + \
+            print("drudder: error: please specify the name " + \
                 "of the service or container to print info for, " +\
                 "or \"all\"", file=sys.stderr)
             sys.exit(1)
@@ -3337,7 +3343,7 @@ def main():
         sys.exit(0)
     elif args.action == "dump-container-info":
         if len(args.argument) == 0:
-            print("docker-rudder: error: please specify the name " + \
+            print("drudder: error: please specify the name " + \
                 "of the service or container to print info for, " +\
                 "or \"all\"", file=sys.stderr)
             sys.exit(1)

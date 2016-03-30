@@ -4,15 +4,17 @@
 
 ## Motivation
 
-**docker-rudder** is a tool which operates on top of docker and
-docker-compose. It doesn't add any notable new features (other than btrfs
-snapshot handling): instead it tries to offer a well-thought-out interface
-to simplify all the required daily tasks needed for managing your docker
+**drudder** is a tool which operates on top of docker and docker-compose to
+introduce a simpler and more powerful API.
+It doesn't add any notable new features (other than btrfs snapshot
+handling): instead it tries to offer a well-thought-out interface to
+simplify all the required daily tasks needed for managing your docker
 containers.
 
-It unifies some tasks requiring multiple commands with the regular docker
-interfaces in single quick commands with sensible defaults and satefy
-checks.
+**drudder** is not a fully fledged orchestration tool and is mainly useful
+if you have a single smaller production server where all software runs on.
+If you want to control a huge docker cloud on multiple physical machines,
+go elsewhere.
 
 
 ## Features
@@ -79,7 +81,7 @@ Copy the drudder script to /usr/bin/ and set execution bit (chmod +x)
 
 # HOW TO add your service
 
-docker-rudder expects services grouped with docker-compose /
+drudder expects services to be grouped with the help of docker-compose /
 docker-compose.yml. The script will scan the following locations for
 services subfolders with a docker-compose.yml in them:
 
@@ -96,25 +98,25 @@ Each service folder inside one of those locatoins should contain:
 To list all currently recognized services, type: `drudder list`
 
 Congratulations, you can now manage launch your service(s) with
-docker-rudder!
+drudder!
 
 
 
 # HOW TO backup
 
-You should backup all your services. docker-rudder provides snapshot
+You should backup all your services. drudder provides snapshot
 functionality to help with this. While you could simply copy your service
 folder with all the mounted volumes in it, this can lead to corrupt copies
 when doing this while some services are operating (SQL databases etc.).
 
-To use docker-rudder snapshots of your writable volumes during service
+To use drudder snapshots of your writable volumes during service
 operation, do this:
 
 1. Enable snapshots as described below
 
-2. Always run "docker-rudder snapshot all" before you make your backup
-   to get consistent snapshots of your writable volumes in a subfolder
-   named livedata-snapshpots/ in each respective service folder.
+2. Always run "drudder snapshot all" before you make your backup to get
+   consistent snapshots of your writable volumes in a subfolder named
+   livedata-snapshpots/ in each respective service folder.
 
 
 
