@@ -365,6 +365,8 @@ class SystemInfo(object):
             "subvolume", "list", path]).\
             decode("utf-8", "ignore").strip().split("\n")
         for line in output:
+            if len(line.strip()) == 0:
+                continue
             if not line.startswith("ID ") or line.find(" path ") < 0:
                 raise RuntimeError("unexpected btrfs tool output - " + \
                     "maybe incompatible tool version? Please report this." +\
