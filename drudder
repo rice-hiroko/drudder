@@ -2177,23 +2177,7 @@ class TargetsParser(object):
     @staticmethod
     def split_targets(targets):
         # Split up the targets:
-        targets_str = targets.strip()
-        targets = []
-        i = 0
-        while i < len(targets_str):
-            c = targets_str[i]
-            if c == " " or c == "+" or c == "-":
-                current_target = targets_str[:i].strip()
-                if len(current_target) > 0:
-                    targets.append(current_target)
-                targets_str = targets_str[i:]
-                i = 1
-                continue
-            i += 1
-        last_target = targets_str.strip()
-        if len(last_target) > 0:
-            targets.append(last_target)
-        return targets
+        return targets.strip().split(" ")
 
     @staticmethod
     def get_containers(targets, print_error=False):
@@ -2276,7 +2260,7 @@ class TargetsParser(object):
         targets = TargetsParser.split_targets(targets)
 
         # Go through all targets in the list:
-        for target in targets.split(" "):
+        for target in targets:
             negated = False
             if target.startswith("+"):
                 target = target[1:]
