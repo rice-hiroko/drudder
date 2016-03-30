@@ -2501,7 +2501,7 @@ class DoAlongDependencyEdges(object):
                         break
                     if predecessor in self.marked_failed:
                         # Whoops, this should also be marked failed.
-                        self.marked_failed.add(next_node.container)
+                        self.marked_failed.add(next_node)
                         reachable = False
                         break
                 if reachable:
@@ -2578,11 +2578,34 @@ class DoAlongDependencyEdges(object):
         """
         result = True
         self.access_lock.acquire()
+
+        def get_predecessors(node):
+            if self.along_incoming:
+                if not self.reverse_yield_order:
+                    return node.outgoing_links
+                else:
+                    return node.incoming_links
+            else:
+                if not self.reverse_yield_order:
+                    return node.incoming_links
+                else:
+                    return node.outgoing_links
+
+        # Check for completely unmarked nodes:
         for node in self.subgraph.values():
             if not node in self.marked_failed and \
                     not node in self.marked_done:
+                # Make sure to propagate failures, eventually:
+                predecessors = get_predecessors(node) 
+                for predecessor in predecessors:
+                    if predecessor in self.marked_failed:
+                        self.marked_failed.add(node)
+                        break
+
+                # Stop since we found an unmarked node:
                 result = False
                 break
+
         self.access_lock.release()
         return result
 
