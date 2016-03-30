@@ -2067,7 +2067,7 @@ class Snapshots(object):
             except Exception as e:
                 os.remove(lock_path)
                 raise e
-            assert(btrfs_is_subvolume(tempvolume_dir))
+            assert(SystemInfo.is_btrfs_subvolume(tempvolume_dir))
 
             # Copy all contents:
             assert(not os.path.exists(tempdata_dir))
