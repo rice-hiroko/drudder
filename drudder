@@ -1763,28 +1763,6 @@ args = parser.parse_args()
 ensure_docker = SystemInfo.docker_path()
 ensure_docker_compose = SystemInfo.docker_compose_path()
 
-def verify_service_names(names):
-    """ This will evaluate all service names passed as command line arguments,
-        and make sure they actually exist (and find out their path). "all" is
-        interpreted and turned into a list of all services. The resulting
-        validated list is returned.
-    """
-    specified_services = []
-    for specified_service in names:
-        if specified_service == "all":
-            return list(services)
-        found = None
-        for service in services:
-            if service['name'] == specified_service:
-                found = service
-                break
-        if found == None:
-            print("docker-rudder: error: no such service found: " +\
-                specified_service, file=sys.stderr)
-            sys.exit(1)
-        specified_services.append(found)
-    return specified_services
-
 class Snapshots(object):
     def __init__(self, service):
         self.service = service
@@ -2195,22 +2173,56 @@ class TargetsParser(object):
     """ A helper class to parse user input and turn it into container or
         services lists.
     """
+    @staticmethod
+    def split_targets(targets):
+        # Split up the targets:
+        targets_str = targets.strip()
+        targets = []
+        i = 0
+        while i < len(targets_str):
+            c = targets_str[i]
+            if c == " " or c == "+" or c == "-":
+                current_target = targets_str[:i].strip()
+                if len(current_target) > 0:
+                    targets.append(current_target)
+                targets_str = targets_str[i:]
+                i = 1
+                continue
+            i += 1
+        last_target = targets_str.strip()
+        if len(last_target) > 0:
+            targets.append(last_target)
+        return targets
 
     @staticmethod
     def get_containers(targets, print_error=False):
         while targets.find("  ") >= 0:
             targets.replace("  ", " ")
         result = set()
-        targets = targets.strip()
+
+        targets = TargetsParser.split_targets(targets)
 
         # Go through all targets in the list:
-        for target in targets.split(" "):
+        for target in targets:
+            negated = False
+            if target.startswith("+"):
+                target = target[1:]
+            elif target.startswith("-"):
+                target = target[1:]
+                negated = True
+
             # Specific treatment of the "all" keyword:
             if target == "all":
                 for service in Service.all():
                     for container in service.containers:
-                        result.add(container)
-                return list(result)
+                        if not negated:
+                            result.add(container)
+                        else:
+                            try:
+                                result.remove(container)
+                            except KeyError:
+                                pass
+                continue
 
             # Examine the current service/container entry:
             service_name = target.partition("/")[0]
@@ -2244,9 +2256,15 @@ class TargetsParser(object):
                             str(container_name),
                             file=sys.stderr)
                     return None
-            # Add all containers collected by this entry:
+            # Add/remove all containers collected by this entry:
             for container in containers:
-                result.add(container)
+                if not negated:
+                    result.add(container)
+                else:
+                    try:
+                        result.remove(container)
+                    except KeyError:
+                        pass
         return list(result)
 
     @staticmethod
@@ -2254,14 +2272,27 @@ class TargetsParser(object):
         while targets.find("  ") >= 0:
             targets.replace("  ", " ")
         result = set()
-        targets = targets.strip()
+        targets = TargetsParser.split_targets(targets)
 
         # Go through all targets in the list:
         for target in targets.split(" "):
+            negated = False
+            if target.startswith("+"):
+                target = target[1:]
+            elif target.startswith("-"):
+                target = target[1:]
+                negated = True
+
             # Specific treatment of the "all" keyword:
             if target == "all":
                 for service in Service.all():
-                    result.add(service)
+                    if not negated:
+                        result.add(service)
+                    else:
+                        try:
+                            result.remove(service)
+                        except KeyError:
+                            pass
                 return list(result)
             service = Service.find_by_name(target.partition("/")[0])
             if service == None:
@@ -2271,7 +2302,13 @@ class TargetsParser(object):
                         target.partition("/")[0]),
                         file=sys.stderr)
                 return None
-            result.add(service)
+            if not negated:
+                result.add(service)
+            else:
+                try:
+                    result.remove(service)
+                except KeyError:
+                    pass
         return list(result)
 
 class ContainerLinkDependencyNode(object):
