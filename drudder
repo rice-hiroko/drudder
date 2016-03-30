@@ -559,7 +559,6 @@ class SystemInfo(object):
         return (output == "256")
 
 def yaml_error():
-    print("docker-rudder: error: no PyYAML available.", file=sys.stderr)
     pip_name = "pip3"
     if SystemInfo.locate_binary(pip_name) == None:
         pip_name = "python3-pip"
