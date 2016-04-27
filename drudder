@@ -297,13 +297,37 @@ class SystemInfo(object):
             # We're done. Parent will receive result and handle things:
             os.exit(0)
         else:
-            # Wait for child to execute process and report result:
-            result_dict = json.loads(parent_conn.recv())
-            parent_conn.close()
+            try:
+                # Wait for child to execute process and report result:
+                if timeout == None:
+                    result_dict = json.loads(parent_conn.recv())
+                else:
+                    if not parent_conn.poll(timeout):
+                        class PtyTimeoutError(subprocess.CalledProcessError):
+                            def __init__(self, exit_code, cmd, cwd):
+                                super().__init__(exit_code, cmd)
+                                self.cwd = cwd
+
+                            def __repr__(self):
+                                return "PtyTimeoutError: command " +\
+                                    "timed out: " + str(self.cmd) +\
+                                    " (cwd: " + str(self.cwd) + ")"
+
+                            def __str__(self):
+                                return self.__repr__()
+
+                        e = PtyTimeoutError(1, cmd, cwd)
+                        e.output = b""
+                        raise e
+                    result_dict = json.loads(parent_conn.recv())
+            finally:
+                parent_conn.close()
             if result_dict["error_happened"] != None:
-                e = subprocess.CalledProcessError(cmd, 1)
+                e = subprocess.CalledProcessError(1, cmd)
                 if result_dict["result"] != None:
                     e.output = base64.b64decode(result_dict["result"])
+                else:
+                    e.output = b""
                 raise e
             return base64.b64decode(result_dict["result"])
 
@@ -550,7 +574,8 @@ class SystemInfo(object):
             if fs_type.find(" ") > 0:
                 fs_type = fs_type[:fs_type.find(" ")].strip()
             return fs_type
-        raise RuntimeError('failed to find according mount entry')
+        raise RuntimeError('failed to find according mount entry for: ' +\
+            path + " (device path: " + str(device_of_path) + ")")
 
     @staticmethod
     def btrfs_subvolume_stat_check(path):
