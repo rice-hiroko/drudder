@@ -544,7 +544,7 @@ class SystemInfo(object):
             raise RuntimeError("failed to parse df output")
         output = output[output.find("\n")+1:]
 
-        # Get first word being the FS of the path:
+        # Get first word being the FS root of the path:
         end_pos = output.find(" ")
         if end_pos <= 0:
             raise RuntimeError("failed to parse df output")
@@ -562,18 +562,25 @@ class SystemInfo(object):
         output = subprocess.check_output([
             SystemInfo.locate_binary("mount")]).\
             decode("utf-8", "ignore")
-        for line in output.split("\n"):
-            if not line.startswith(device_of_path + " "):
-                continue
-            i = len(line) - 1
-            while not line[i:].startswith(" type ") and i > 0:
-                i -= 1
-            if not line[i:].startswith(" type "):
-                raise RuntimeError("failed to parse mount output")
-            fs_type = line[i + len(" type "):].strip()
-            if fs_type.find(" ") > 0:
-                fs_type = fs_type[:fs_type.find(" ")].strip()
-            return fs_type
+        def find_mount_for(device):
+            for line in output.split("\n"):
+                if not line.startswith(device + " "):
+                    continue
+                i = len(line) - 1
+                while not line[i:].startswith(" type ") and i > 0:
+                    i -= 1
+                if not line[i:].startswith(" type "):
+                    raise RuntimeError("failed to parse mount output")
+                fs_type = line[i + len(" type "):].strip()
+                if fs_type.find(" ") > 0:
+                    fs_type = fs_type[:fs_type.find(" ")].strip()
+                return fs_type
+            return None
+        result = find_mount_for(device_of_path)
+        if result == None:
+            result = find_mount_for(os.path.realpath(device_of_path))
+        if result != None:
+            return result
         raise RuntimeError('failed to find according mount entry for: ' +\
             path + " (device path: " + str(device_of_path) + ")")
 
