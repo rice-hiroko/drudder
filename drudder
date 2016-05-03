@@ -1371,7 +1371,7 @@ class Service(object):
                 running_containers.append(output_line[:space_pos])
         l = [self._fix_container_name(container) \
             for container in running_containers]
-        return l
+        return [name for name in l if name is not None]
 
     def _internal_docker_compose_links(self, container_name):
         """ Attempt to parse and return all containers referenced as external
