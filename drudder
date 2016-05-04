@@ -197,6 +197,7 @@ import datetime
 import json
 import multiprocessing
 import os
+import platform
 import pty
 import queue
 import subprocess
@@ -209,6 +210,10 @@ import threading
 import time
 import traceback
 import uuid
+
+# Only import this on Unix systems:
+if platform.system().lower() != "windows":
+    import stat
 
 yaml_available = False
 try:
@@ -1976,16 +1981,17 @@ class Snapshots(object):
                 ", should be btrfs!")
             return fs
 
+        actual_path = os.path.realpath(self.service.service_path)
         livedata_renamed_dir = os.path.join(
-            self.service.service_path, ".livedata-predeletion-renamed")
+            actual_path, ".livedata-predeletion-renamed")
         livedata_dir = os.path.join(
-            self.service.service_path, "livedata")
+            actual_path, "livedata")
         snapshot_dir = os.path.join(
-            self.service.service_path, ".btrfs-livedata-snapshot")
+            actual_path, ".btrfs-livedata-snapshot")
         tempvolume_dir = os.path.join(
-            self.service.service_path, ".btrfs-livedata-temporary-volume")
+            actual_path, ".btrfs-livedata-temporary-volume")
         tempdata_dir = os.path.join(
-            self.service.service_path, ".livedata-temporary-prevolume-copy")
+            actual_path, ".livedata-temporary-prevolume-copy")
 
         # Make sure the livedata/ dir is a btrfs subvolume:    
         if self.service.is_running():
@@ -2105,7 +2111,24 @@ class Snapshots(object):
 
             # Copy all contents:
             assert(not os.path.exists(tempdata_dir))
-            shutil.copytree(livedata_dir, tempdata_dir, symlinks=True)
+            try:
+                shutil.copytree(os.path.realpath(livedata_dir), tempdata_dir, symlinks=True)
+            except shutil.Error as e:
+                # Check for errors we care about:
+                relevant_errors = []
+                for err in e.args[0]:
+                    src, dst, msg = err
+                    if str(msg).startswith("[Errno 6]"):
+                        # This occurs with Unix socekts. Check if it is one:
+                        mode = os.stat(src).st_mode
+                        if stat.S_ISSOCK(mode):
+                            continue # It is. Skip it!
+                    # This is an unknown error we most likely care about:
+                    relevant_errors.append(err)
+                if len(relevant_errors) > 0:
+                    e.args[0] = relevant_errors
+                    raise e
+
             assert(os.path.exists(tempdata_dir))
             for f in os.listdir(tempdata_dir):
                 orig_path = os.path.join(tempdata_dir, f)
