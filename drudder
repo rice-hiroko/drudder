@@ -1764,9 +1764,11 @@ parser.add_argument("action",
             specified as argument (or "all" for all).
 
     "shell": start an interactive shell in the specified service's specified
-             subservice (parameters: <service> <subservice>) - the subservice
-             is optional if the docker-compose.yml has just one
-             container/subservice.
+             subservice. The argument is:
+               <service>[/<subservice>]
+               e.g.: drudder shell myownservice/datcoolsubservice
+             The subservice can be omitted from the argument if the
+             docker-compose.yml has just one container/subservice.
 
     "snapshot": store an atomic snapshot of the live data of the service
                 specified as argument (from livedata/) in livedata-snapshots/
