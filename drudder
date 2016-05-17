@@ -283,23 +283,30 @@ class SystemInfo(object):
                     result = subprocess.check_output(cmd, shell=shell,
                         cwd=cwd, stderr=stderr, timeout=timeout,
                         env=env)
+                try:
+                    result = result.encode("utf-8", "replace")
+                except AttributeError:
+                    pass
             except Exception as e:
                 if isinstance(e, CalledProcessError):
-                    result_dict["result"] = base64.b64encode(e.output).decode(
-                        "utf-8", "ignore")
+                    result_dict["result"] = base64.b64encode(
+                        e.output).decode("utf-8", "ignore")
                 error_happened = e
 
             # Collect result and send back to parent:
             result_dict["error_happened"] = \
-                None if error_happened is None else str(error_happened)
+                None if error_happened is None else str(
+                    error_happened)
             if result != None:
-                result_dict["result"] = base64.b64encode(result).decode(
-                    "utf-8", "ignore")
+                result_dict["result"] = base64.b64encode(
+                    result).decode("utf-8", "ignore")
             dumped = json.dumps(result_dict)
             child_conn.send(dumped)
+            time.sleep(1)
             child_conn.close()
 
-            # We're done. Parent will receive result and handle things:
+            # We're done. Parent will receive result and do stuff:
+            time.sleep(1)
             os.exit(0)
         else:
             try:
@@ -1150,20 +1157,22 @@ class ServiceContainer(object):
             vol.specified_in_yml = from_yml
             volumes.append(vol)
 
-        volumes_in_yml = set()
+        volumes_in_yml_by_normpath = set()
         vol_lines = {}
         for vol1 in self._active_volumes(rw_only=rw_only):
             if not vol1[0] in vol_lines or vol_lines[vol1[0]] == None:
-                vol_lines[vol1[0]] = vol1[1]
+                vol_lines[os.path.normpath(vol1[0])] = vol1[1]
         for vol2 in self._config_specified_volumes(rw_only=rw_only):
             if not vol2[0] in vol_lines or vol_lines[vol2[0]] == None:
-                vol_lines[vol2[0]] = vol2[1]
-            volumes_in_yml.add(vol2[0])
-        for vol_line in vol_lines:
-            if vol_line in volumes_in_yml:
-                add_volume((vol_line, vol_lines[vol_line]), from_yml=True)
+                vol_lines[os.path.normpath(vol2[0])] = vol2[1]
+            volumes_in_yml.add(os.path.normpath(vol2[0]))
+        for vol_line_part0 in vol_lines:
+            if os.path.normpath(vol_line_part0) in\
+                    volumes_in_yml_by_normpath:
+                add_volume((vol_line_part0, vol_lines[vol_line_part0]),
+                    from_yml=True)
             else:
-                add_volume((vol_line, vol_lines[vol_line]))
+                add_volume((vol_line_part0, vol_lines[vol_line_part0]))
         return volumes
 
     @property
