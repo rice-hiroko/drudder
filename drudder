@@ -1165,7 +1165,7 @@ class ServiceContainer(object):
         for vol2 in self._config_specified_volumes(rw_only=rw_only):
             if not vol2[0] in vol_lines or vol_lines[vol2[0]] == None:
                 vol_lines[os.path.normpath(vol2[0])] = vol2[1]
-            volumes_in_yml.add(os.path.normpath(vol2[0]))
+            volumes_in_yml_by_normpath.add(os.path.normpath(vol2[0]))
         for vol_line_part0 in vol_lines:
             if os.path.normpath(vol_line_part0) in\
                     volumes_in_yml_by_normpath:
