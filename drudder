@@ -53,9 +53,17 @@ freely, subject to the following restrictions:
 
 
 
-    # Basic usage
+    # Usage
 
-    Usage:
+
+    ## Basics
+
+    This are the basic required commands for a simple single machine setup
+    where all your services are located on the local filesystem inside
+    the folder ```/srv/```.
+    (see the section ```HOW TO add your service``` for details on how those
+    services need to be set up)
+
 
     ```
       drudder list                - list all known services
@@ -84,14 +92,20 @@ freely, subject to the following restrictions:
       drudder snapshot <service>  - makes a snapshot of the live data if
                                     enabled. (optional) This feature requires
                                     btrfs
-      drudder clean               - deletes all containers that aren't running
-                                    and all dangling volumes
     ```
-
     **Hint**: You can always use "all" as service target if you want to apply
     an action to all services on your machine.
 
 
+    ## Maintenance
+
+    These are rare special commands you might need for the occasional special
+    maintenance.
+
+    ```
+      drudder clean               - deletes all containers that aren't running
+                                    and all dangling volumes
+    ```
 
     # Installation
 
@@ -391,9 +405,9 @@ class Installer(object):
             missing.append("docker-compose")
 
         if len(missing) > 0: 
-            print("drudder: warning: there are missing packages: " +\
+            print("drudder: warning: missing components detected: " +\
                 ", ".join(missing) + ". Invoking installer...")
-            if SystemInfo.yesno("Do you want to install: " +\
+            if SystemInfo.yesno("Do you want to install (system-wide): " +\
                     ", ".join(missing), default_yes=False):
                 for component in missing:
                     if component == "PyYAML":

@@ -32,45 +32,59 @@ go elsewhere.
 **This script is in an experimental state. Expect some bugs and problems.**
 
 
+# Usage
 
-# Basic usage
 
-Usage:
+## Basics
+
+This are the basic required commands for a simple single machine setup
+where all your services are located on the local filesystem inside
+the folder ```/srv/```.
+(see the section ```HOW TO add your service``` for details on how those
+services need to be set up)
+
 
 ```
   drudder list                - list all known services
   drudder start <service>     - starts the specified service
   drudder stop <service>      - stops the specified service
   drudder restart <service>   - restarts the given service.
-                                **WARNING**: the containers will *always*
-                                get rebuilt and recreated by this command
-                                (unless this would result in dangling
-                                volumes).
-                                All data in the containers outside of
-                                volumes will be reset!
+								**WARNING**: the containers will *always*
+								get rebuilt and recreated by this command
+								(unless this would result in dangling
+								volumes).
+								All data in the containers outside of
+								volumes will be reset!
   drudder rebuild <service>   - force rebuild of the service from the
-                                newest Dockerfile and/or image. Please note
-                                this is only required if you want to force
-                                a rebuild from the ground up, the (re)start
-                                actions will already update the container 
-                                if any of the relevant Dockerfiles were
-                                changed.
+								newest Dockerfile and/or image. Please note
+								this is only required if you want to force
+								a rebuild from the ground up, the (re)start
+								actions will already update the container 
+								if any of the relevant Dockerfiles were
+								changed.
   drudder info <service>[/subservice] - show extended info about the
-                                        service
+										service
   drudder logs <service>      - print logs of all docker containers of the
-                                service
+								service
   drudder shell <service>[/<subservice>]  - run a shell in the specified
-                                            subservice's container
+											subservice's container
   drudder snapshot <service>  - makes a snapshot of the live data if
-                                enabled. (optional) This feature requires
-                                btrfs
-  drudder clean               - deletes all containers that aren't running
-                                and all dangling volumes
+								enabled. (optional) This feature requires
+								btrfs
 ```
-
 **Hint**: You can always use "all" as service target if you want to apply
 an action to all services on your machine.
 
+
+## Maintenance
+
+These are rare special commands you might need for the occasional special
+maintenance.
+
+```
+  drudder clean               - deletes all containers that aren't running
+								and all dangling volumes
+```
 
 
 # Installation
