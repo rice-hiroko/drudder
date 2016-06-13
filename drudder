@@ -103,14 +103,16 @@ freely, subject to the following restrictions:
     maintenance.
 
     ```
+      drudder tools-install       - install and update all required tools for
+                                    running drudder on this computer
       drudder clean               - deletes all containers that aren't running
                                     and all dangling volumes
     ```
 
     # Installation
 
-    Copy the drudder script to /usr/bin/ and set execution bit (chmod +x)
-
+    Copy the drudder script to /usr/bin/ and set execution bit (chmod +x).
+    Then run: ```sudo drudder tools-install```
 
 
     # HOW TO add your service
@@ -133,7 +135,6 @@ freely, subject to the following restrictions:
 
     Congratulations, you can now manage launch your service(s) with
     drudder!
-
 
 
     # HOW TO backup
@@ -2143,8 +2144,8 @@ parser.add_argument("action",
     "snapshot": store an atomic snapshot of the live data of the service
                 specified as argument (from livedata/) in livedata-snapshots/
 
-    "clean": clean up all stopped containers. THIS IS NOT REVERSIBLE. The
-             docker images of course won't be touched.
+    "clean": clean up all stopped containers and all dangling volumes.
+             THIS IS NOT REVERSIBLE. The docker images won't be touched.
 
     "dump-container-info" : dump all sorts of detailed container info as YAML.
                             Mainly useful if you want to process the combined
@@ -3272,7 +3273,12 @@ def main():
     parser.add_argument("action",
         help=textwrap.dedent('''\
         Possible values:
-        
+
+        "tools-install": install and upgrade all required tools like
+                         docker-machine and docker-compose on the local
+                         computer. This will automatically fetch and provide
+                         anything to require drudder.
+ 
         "list": list all known services.
 
         "start": start the service specified as argument (or "all" for all).
