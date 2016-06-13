@@ -476,6 +476,10 @@ class Installer(object):
                 # docker-compose is already installed, nothing to do.
                 return
 
+# Only import this on Unix systems:
+if platform.system().lower() != "windows":
+    import stat
+
 class SystemInfo(object):
     """ This class provides system info of various sorts about the installed
         docker versions, btrfs and more.
@@ -553,23 +557,30 @@ class SystemInfo(object):
                     result = subprocess.check_output(cmd, shell=shell,
                         cwd=cwd, stderr=stderr, timeout=timeout,
                         env=env)
+                try:
+                    result = result.encode("utf-8", "replace")
+                except AttributeError:
+                    pass
             except Exception as e:
                 if isinstance(e, CalledProcessError):
-                    result_dict["result"] = base64.b64encode(e.output).decode(
-                        "utf-8", "ignore")
+                    result_dict["result"] = base64.b64encode(
+                        e.output).decode("utf-8", "ignore")
                 error_happened = e
 
             # Collect result and send back to parent:
             result_dict["error_happened"] = \
-                None if error_happened is None else str(error_happened)
+                None if error_happened is None else str(
+                    error_happened)
             if result != None:
-                result_dict["result"] = base64.b64encode(result).decode(
-                    "utf-8", "ignore")
+                result_dict["result"] = base64.b64encode(
+                    result).decode("utf-8", "ignore")
             dumped = json.dumps(result_dict)
             child_conn.send(dumped)
+            time.sleep(1)
             child_conn.close()
 
-            # We're done. Parent will receive result and handle things:
+            # We're done. Parent will receive result and do stuff:
+            time.sleep(1)
             os.exit(0)
         else:
             try:
@@ -1439,20 +1450,22 @@ class ServiceContainer(object):
             vol.specified_in_yml = from_yml
             volumes.append(vol)
 
-        volumes_in_yml = set()
+        volumes_in_yml_by_normpath = set()
         vol_lines = {}
         for vol1 in self._active_volumes(rw_only=rw_only):
             if not vol1[0] in vol_lines or vol_lines[vol1[0]] == None:
-                vol_lines[vol1[0]] = vol1[1]
+                vol_lines[os.path.normpath(vol1[0])] = vol1[1]
         for vol2 in self._config_specified_volumes(rw_only=rw_only):
             if not vol2[0] in vol_lines or vol_lines[vol2[0]] == None:
-                vol_lines[vol2[0]] = vol2[1]
-            volumes_in_yml.add(vol2[0])
-        for vol_line in vol_lines:
-            if vol_line in volumes_in_yml:
-                add_volume((vol_line, vol_lines[vol_line]), from_yml=True)
+                vol_lines[os.path.normpath(vol2[0])] = vol2[1]
+            volumes_in_yml_by_normpath.add(os.path.normpath(vol2[0]))
+        for vol_line_part0 in vol_lines:
+            if os.path.normpath(vol_line_part0) in\
+                    volumes_in_yml_by_normpath:
+                add_volume((vol_line_part0, vol_lines[vol_line_part0]),
+                    from_yml=True)
             else:
-                add_volume((vol_line, vol_lines[vol_line]))
+                add_volume((vol_line_part0, vol_lines[vol_line_part0]))
         return volumes
 
     @property
@@ -1665,7 +1678,7 @@ class Service(object):
                 running_containers.append(output_line[:space_pos])
         l = [self._fix_container_name(container) \
             for container in running_containers]
-        return l
+        return [name for name in l if name is not None]
 
     def _internal_docker_compose_links(self, container_name):
         """ Attempt to parse and return all containers referenced as external
@@ -2053,9 +2066,11 @@ parser.add_argument("action",
             specified as argument (or "all" for all).
 
     "shell": start an interactive shell in the specified service's specified
-             subservice (parameters: <service> <subservice>) - the subservice
-             is optional if the docker-compose.yml has just one
-             container/subservice.
+             subservice. The argument is:
+               <service>[/<subservice>]
+               e.g.: drudder shell myownservice/datcoolsubservice
+             The subservice can be omitted from the argument if the
+             docker-compose.yml has just one container/subservice.
 
     "snapshot": store an atomic snapshot of the live data of the service
                 specified as argument (from livedata/) in livedata-snapshots/
@@ -2270,16 +2285,17 @@ class Snapshots(object):
                 ", should be btrfs!")
             return fs
 
+        actual_path = os.path.realpath(self.service.service_path)
         livedata_renamed_dir = os.path.join(
-            self.service.service_path, ".livedata-predeletion-renamed")
+            actual_path, ".livedata-predeletion-renamed")
         livedata_dir = os.path.join(
-            self.service.service_path, "livedata")
+            actual_path, "livedata")
         snapshot_dir = os.path.join(
-            self.service.service_path, ".btrfs-livedata-snapshot")
+            actual_path, ".btrfs-livedata-snapshot")
         tempvolume_dir = os.path.join(
-            self.service.service_path, ".btrfs-livedata-temporary-volume")
+            actual_path, ".btrfs-livedata-temporary-volume")
         tempdata_dir = os.path.join(
-            self.service.service_path, ".livedata-temporary-prevolume-copy")
+            actual_path, ".livedata-temporary-prevolume-copy")
 
         # Make sure the livedata/ dir is a btrfs subvolume:    
         if self.service.is_running():
@@ -2399,7 +2415,24 @@ class Snapshots(object):
 
             # Copy all contents:
             assert(not os.path.exists(tempdata_dir))
-            shutil.copytree(livedata_dir, tempdata_dir, symlinks=True)
+            try:
+                shutil.copytree(os.path.realpath(livedata_dir), tempdata_dir, symlinks=True)
+            except shutil.Error as e:
+                # Check for errors we care about:
+                relevant_errors = []
+                for err in e.args[0]:
+                    src, dst, msg = err
+                    if str(msg).startswith("[Errno 6]"):
+                        # This occurs with Unix socekts. Check if it is one:
+                        mode = os.stat(src).st_mode
+                        if stat.S_ISSOCK(mode):
+                            continue # It is. Skip it!
+                    # This is an unknown error we most likely care about:
+                    relevant_errors.append(err)
+                if len(relevant_errors) > 0:
+                    e.args[0] = relevant_errors
+                    raise e
+
             assert(os.path.exists(tempdata_dir))
             for f in os.listdir(tempdata_dir):
                 orig_path = os.path.join(tempdata_dir, f)
