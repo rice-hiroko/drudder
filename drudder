@@ -635,14 +635,46 @@ class Installer(object):
                     "privileges", file=sys.stderr)
                 sys.exit(1)
 
-            # Install docker-engine:
+            # Install docker-engine package:
             subprocess.check_output(["apt-get", "update"])
             subprocess.check_output(["apt-get", "install", "-y",
                 "docker-engine"])
             return
         # Fedora docker install:
         elif distribution == "fedora":
-            
+            sources_lst_file = os.path.join("/etc", "yum.repos.d",
+                "docker.repo")
+            if os.path.exists(sources_lst_file):
+                try:
+                    os.remove(sources_lst_file)
+                except OSError:
+                    print("drudder: error: failed to remove file: " +\
+                        str(sources_lst_file))
+                    print("Please re-run this with sudo / administrator " +\
+                        "privileges", file=sys.stderr)
+                    sys.exit(1)
+            try:
+                with open(sources_lst_file, "w") as f:
+                    f.write(textwrap.dedent("""\
+                    [dockerrepo]
+                    name=Docker Repository
+                    baseurl=https://yum.dockerproject.org/repo/main/fedora/$releasever/
+                    enabled=1
+                    gpgcheck=1
+                    gpgkey=https://yum.dockerproject.org/gpg
+                    """)
+            except OSError:
+                print("drudder: error: failed to create file: " +\
+                    str(sources_lst_file))
+                print("Please re-run this with sudo / administrator " +\
+                    "privileges", file=sys.stderr)
+                sys.exit(1)
+
+            # Install docker-engine package:
+            subprocess.check_output(["dnf", "update"])
+            subprocess.check_output(["dnf", "install", "-y",
+                "docker-engine"])
+            return
         # Others:
         else:
             print("drudder: error: unsupported distribution: " + str(
