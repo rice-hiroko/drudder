@@ -269,14 +269,83 @@ class Installer(object):
         if YAMLInstallInfo.test_for_yaml():
             # YAML is available, nothing to do.
             return
+
+        # Obtain PyPI page for download link:
+        import urllib.request
+        pyyaml_url = 'https://pypi.python.org/pypi/PyYAML'
+        try:
+            with urllib.request.urlopen(
+                    pyyaml_url) as response:
+                html = response.read()
+        except Exception as e:
+            print("drudder: error: failed to obtain " + str(pyyaml_url),
+                file=sys.stderr)
+            print("Please check your internet connectivity.", file=sys.stderr)
+            sys.exit(1)
+        def extract_source_link():
+            _html = html
+            print("EXAMINING HTML: " + str(_html))
+            pos = 0
+            while True:
+                def extract_block_url_title(block):
+                    print("EXAMINING BLOCK: " + str(block))
+                    link_start = block.find("<a href=\"")
+                    if link_start < 0:
+                        return (None, None)
+                    link_end = block[link_start:].find("\"")
+                    if link_end < 0:
+                        return (None, None)
+                    link_end += link_start
+                    text_block_start = block.find(">",
+                        block.find("<td ", link_end))
+                    if text_block_start < 0:
+                        return (None, None)
+                    text_block_end = block.find("<", text_block_start)
+                    if text_block_end < 0:
+                        return (None, None)
+                    link_target = block[link_start:link_end]
+                    block_title = block[text_block_start:block_start_end]
+                    return (link_target, block_title)
+                # Find next relevant block start:
+                next_block_start_1 = _html.find("<tr class=\"odd", pos)
+                next_block_start_2 = _html.find("<tr class=\"even", pos)
+                next_block_start = next_block_start_1
+                if next_block_start < 0 or (next_block_start_2 >= 0 and \
+                        next_block_start_2 < next_block_start):
+                    next_block_start = next_block_start_2
+                if next_block_start < 0:
+                    return None
+                # Get the end to the block:
+                next_block_end = _html[next_block_start:].find("</tr>")
+                if next_block_end <= 0:
+                    return None
+                next_block_end += next_block_start
+                # Analyze block for link
+                (url, title) = extract_block_url_title(_html[
+                    next_block_start:next_block_end])
+                if url != None and title.strip().lower().find("source") >= 0:
+                    return url.partition("#")[0]
+
+        # PyYAML source download link:
+        yaml_source_link = extract_source_link()
+        print("YAML SOURCE LINK: " + str(yaml_source_link))
+        if yaml_source_link:
+            print("drudder: error: failed to obtain YAML download link. " +\
+                "Please check your internet connection, and if this " +\
+                "problem persists, file a bug at " +\
+                "https://github.com/JonasT/drudder", file=sys.stderr)
+            sys.exit(1)
+
+        # Make sure the install base path exists:
         parent_path = YAMLInstallInfo.custom_yaml_install_path_parent()
         if not os.path.exists(parent_path):
             try:
                 os.mkdir(parent_path) 
             except OSError:
-                print("Failed to create path: " + str(parent_path))
+                print("drudder: error: failed to create path: " +\
+                    str(parent_path), file=sys.stderr)
                 print("Please rerun this with sudo / administrator " +\
-                    "privileges.")
+                    "privileges.", file=sys.stderr)
                 sys.exit(1)
 
     @staticmethod
