@@ -277,6 +277,10 @@ class Installer(object):
             with urllib.request.urlopen(
                     pyyaml_url) as response:
                 html = response.read()
+                try:
+                    html = html.decode("utf-8", "replace")
+                except AttributeError:
+                    pass
         except Exception as e:
             print("drudder: error: failed to obtain " + str(pyyaml_url),
                 file=sys.stderr)
