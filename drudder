@@ -821,10 +821,8 @@ try:
     import yaml
     yaml_available = True
 except ImportError as e1:
-    print("IMPORT ERROR 1: " + str(e1))
     yaml_available = False
     yml_lib_path = YAMLInstallInfo.custom_yaml_install_path()
-    print("LIB PATH: " + str(yml_lib_path))
     if yml_lib_path != None and os.path.exists(yml_lib_path):
         sys.path.insert(0, yml_lib_path + "/lib3/")
         sys.path.insert(0, yml_lib_path + "/lib3/yaml/")
@@ -832,7 +830,6 @@ except ImportError as e1:
             import yaml
             yaml_available = True
         except ImportError as e2:
-            print("IMPORT ERROR 2: " + str(e2))
             pass
 if not yaml_available:
     print("drudder: error: PyYAML import unexpectedly failed. " +\
