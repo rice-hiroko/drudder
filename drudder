@@ -262,7 +262,7 @@ class Installer(object):
             #   v0.7.0/docker-machine-`uname -s`-`uname -m`
 
             # Follow the "latest" URL to the actual latest tag:
-            tag_url = 'https://github.com/docker/machine/releases/download/' +\
+            tag_url = 'https://github.com/docker/machine/releases/' +\
                 'latest'
             try: 
                 target = urllib2.urlopen(tag_url)
