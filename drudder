@@ -530,15 +530,6 @@ class Installer(object):
 
         # Get docker machine:
 
-    @staticmethod
-    def install_docker_compose(force_upgrade=False):
-        if not force_upgrade:
-            path_to_dc = SystemInfo.docker_compose_path(
-                fail_if_not_found=False)
-            if path_to_dc != None:
-                # docker-compose is already installed, nothing to do.
-                return
-
 # Only import this on Unix systems:
 if platform.system().lower() != "windows":
     import stat
