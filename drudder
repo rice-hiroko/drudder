@@ -252,13 +252,55 @@ class Installer(object):
             # Already installed, nothing to do.
             return
 
+        # Get the docker machine download link:
+        if platform.system().lower() == "windows":
+            raise NotImplementedError("windows download URL not " +\
+                "implemented")
+        else:
+            # Compose URL:
+            # https://github.com/docker/machine/releases/download/
+            #   v0.7.0/docker-machine-`uname -s`-`uname -m`
+            url = "https://github.com/docker/machine/releases/" +\
+                "download/latest/docker-machine-" +\
+                subprocess.check_output("uname -s") + "-" +\
+                subprocess.check_output("uname -m")
+
+            # Download docker-machine binary:
+            try:
+                local_filename, headers = urllib.request.urlretrieve(
+                    url)
+            except Exception as e:
+                print("drudder: error: failed to obtain " + str(url),
+                    file=sys.stderr)
+                print("Please check your internet connectivity.",
+                    file=sys.stderr)
+                sys.exit(1)
+
+            # Put binary into place for use:
+            docker_machine_target = os.path.join("/usr", "local", "bin",
+                "docker-machine")
+            try:
+                shutil.copy(local_filename, docker_machine_target)
+            except Exception as e:
+                print("drudder: error: failed to create path: " +\
+                    str(docker_machine_target), file=sys.stderr)
+                print("Please rerun this with sudo / administrator " +\
+                    "privileges.", file=sys.stderr)
+                sys.exit(1)
+
+            # Set executable flag (+x):
+            import stat
+            os.chmod(docker_machine_target,
+                os.stat(docker_machine_target).st_mode
+                | stat.S_IEXEC)
+
     @staticmethod
     def check_and_install_missing():
         missing = []
         if not YAMLInstallInfo.test_for_yaml():
             missing.append("PyYAML")
-        #if not SystemInfo.docker_machine_path(fail_if_not_found=False):
-        #    missing.append("docker-machine")
+        if not SystemInfo.docker_machine_path(fail_if_not_found=False):
+            missing.append("docker-machine")
 
         if len(missing) > 0: 
             print("drudder: warning: there are missing packages: " +\
