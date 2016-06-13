@@ -296,6 +296,7 @@ class Installer(object):
                     link_start = block.find("<a href=\"")
                     if link_start < 0:
                         return (None, None)
+                    line_start += len("<a href=\"")
                     link_end = block[link_start:].find("\"")
                     if link_end < 0:
                         return (None, None)
@@ -333,7 +334,7 @@ class Installer(object):
         # PyYAML source download link:
         yaml_source_link = extract_source_link()
         print("YAML SOURCE LINK: " + str(yaml_source_link))
-        if yaml_source_link:
+        if yaml_source_link == None:
             print("drudder: error: failed to obtain YAML download link. " +\
                 "Please check your internet connection, and if this " +\
                 "problem persists, file a bug at " +\
