@@ -296,7 +296,7 @@ class Installer(object):
                     link_start = block.find("<a href=\"")
                     if link_start < 0:
                         return (None, None)
-                    line_start += len("<a href=\"")
+                    link_start += len("<a href=\"")
                     link_end = block[link_start:].find("\"")
                     if link_end < 0:
                         return (None, None)
