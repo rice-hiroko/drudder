@@ -187,6 +187,7 @@ freely, subject to the following restrictions:
 """
 
 TOOL_VERSION="0.1"
+BUG_URL="https://github.com/JonasT/drudder"
 
 import argparse
 from argparse import RawTextHelpFormatter, HelpFormatter
@@ -241,28 +242,38 @@ class YAMLInstallInfo(object):
                 if os.path.isdir(full_path):
                     return full_path
         return None
-        
-
-yaml_available = False
-try:
-    import yaml
-    yaml_available = True
-except ImportError:
-    yaml_available = False
-    yml_lib_path = YAMLInstallInfo.custom_yaml_install_path()
-    if yml_lib_path != None and os.path.exists(yml_lib_path):
-        sys.path.insert(0, yml_lib_path)
-        try:
-            import yaml
-            yaml_available = True
-        except ImportError:
-            pass
-    pass
+       
 
 class Installer(object):
     @staticmethod
     def install_docker_machine():
-        pass
+        if SystemInfo.docker_machine_path(fail_if_not_found=False) \
+                != None:
+            # Already installed, nothing to do.
+            return
+
+    @staticmethod
+    def check_and_install_missing():
+        missing = []
+        if not YAMLInstallInfo.test_for_yaml():
+            missing.append("PyYAML")
+        if not SystemInfo.docker_machine_path(fail_if_not_found=False):
+            missing.append("docker-machine")
+
+        if len(missing) > 0: 
+            print("drudder: warning: there are missing packages: " +\
+                ", ".join(missing) + ". Invoking installer...")
+            if SystemInfo.yesno("Do you want to install: ",
+                    ", ".join(missing), default_yes=True):
+                for component in missing:
+                    if component == "PyYAML":
+                        Installer.install_yaml()
+                    elif component == "docker-machine":
+                        Installer.install_docker_machine()
+            else:
+                print("drudder: error: missing components: " +\
+                    ", ".join(missing))
+                sys.exit(1)
 
     @staticmethod
     def install_yaml():
@@ -333,12 +344,17 @@ class Installer(object):
 
         # PyYAML source download link:
         yaml_source_link = extract_source_link()
-        print("YAML SOURCE LINK: " + str(yaml_source_link))
         if yaml_source_link == None:
-            print("drudder: error: failed to obtain YAML download link. " +\
+            print("drudder: error: failed to obtain PyYAML download link. " +\
                 "Please check your internet connection, and if this " +\
                 "problem persists, file a bug at " +\
-                "https://github.com/JonasT/drudder", file=sys.stderr)
+                BUG_URL, file=sys.stderr)
+            sys.exit(1)
+        if not yaml_source_link.startswith("https://"):
+            print("drudder: error: PyYAML download link is bogus, " +\
+                "unexpected protocol: " + str(yaml_source_link))
+            print("Please file a bug at " +\
+                BUG_URL, file=sys.stderr)
             sys.exit(1)
 
         # Make sure the install base path exists:
@@ -352,6 +368,24 @@ class Installer(object):
                 print("Please rerun this with sudo / administrator " +\
                     "privileges.", file=sys.stderr)
                 sys.exit(1)
+
+        # Get source:
+        try:
+            local_filename, headers = urllib.request.urlretrieve(
+                yaml_source_link)
+            source_extract_path = os.path.join(
+                parent_path, "PyYaml.tar.gz")
+        except Exception as e:
+            print("drudder: error: failed to obtain " + str(
+                yaml_source_link_url),
+                file=sys.stderr)
+            print("Please check your internet connectivity.", file=sys.stderr)
+            sys.exit(1)
+
+        # Extract PyYAML:
+        import tarfile
+        tar_file = tarfile.open(source_extract_path)
+        tar_file.extractall(parent_path)
 
     @staticmethod
     def install_docker():
@@ -376,6 +410,7 @@ class SystemInfo(object):
         docker versions, btrfs and more.
     """
     __cached_docker_path = None
+    __cached_docker_machine_path = None
 
     @staticmethod
     def yesno(text, default_yes=False):
@@ -499,6 +534,18 @@ class SystemInfo(object):
                     e.output = b""
                 raise e
             return base64.b64decode(result_dict["result"])
+
+    @staticmethod
+    def docker_machine_path(fail_if_not_found=True):
+        if SystemInfo.__cached_docker_machine_path != None:
+            return SystemInfo.__cached_docker_machine_path
+        path = SystemInfo.locate_binary("docker-machine")
+        if path != None:
+            return path
+        if fail_if_not_found is True:
+            print("drudder: error: no docker-machine found. Is it installed?")
+            sys.exit(1)
+        return None
 
     @staticmethod
     def docker_path(fail_if_not_found=True):
@@ -767,28 +814,26 @@ class SystemInfo(object):
             "-c", "%i", path]).decode('utf-8', 'ignore').strip()
         return (output == "256")
 
-def yaml_error():
-    pip_name = "pip3"
-    if SystemInfo.locate_binary(pip_name) == None:
-        pip_name = "python3-pip"
-        if SystemInfo.locate_binary(pip_name) == None:
-            pip_name = "python-pip3"
-            if SystemInfo.locate_binary(pip_name) == None:
-                pip_name = None
-    if pip_name != None:
-        print("drudder: error: no PyYAML available. " +\
-            "Install PyYAML using:", file=sys.stderr)
-        print("    sudo " + pip_name + " install pyyaml")
-    else:
-        print("drudder: error: no PyYaml available. (pip3 is also " +\
-            "unavailable??)", file=sys.stderr)
+Installer.check_and_install_missing()
+
+yaml_available = False
+try:
+    import yaml
+    yaml_available = True
+except ImportError:
+    yaml_available = False
+    yml_lib_path = YAMLInstallInfo.custom_yaml_install_path()
+    if yml_lib_path != None and os.path.exists(yml_lib_path):
+        sys.path.insert(0, yml_lib_path)
+        try:
+            import yaml
+            yaml_available = True
+        except ImportError:
+            pass
 if not yaml_available:
-    print("drudder: warning: PyYAML is unavailable. Invoking installer...")
-    if SystemInfo.yesno("Do you want to install PyYAML?", default_yes=True):
-        Installer.install_yaml()
-    else:
-        yaml_error()
-        sys.exit(1)
+    print("drudder: error: PyYAML impport unexpectedly failed. " +\
+        "Please file a bug at " + str(BUG_URL))
+    sys.exit(1)
 
 class DoubleLineBreakFormatter(HelpFormatter):
     """ Retains double line breaks/paragraphs """
