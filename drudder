@@ -233,6 +233,8 @@ class YAMLInstallInfo(object):
     @staticmethod
     def custom_yaml_install_path():
         parent_folder = YAMLInstallInfo.custom_yaml_install_path_parent()
+        if not os.path.exists(parent_folder):
+            return None
         for fname in os.listdir(parent_folder):
             if fname.startswith("PyYAML-"):
                 full_path = os.path.join(parent_folder, fname)
