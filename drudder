@@ -308,7 +308,7 @@ class Installer(object):
                     if text_block_end < 0:
                         return (None, None)
                     link_target = block[link_start:link_end]
-                    block_title = block[text_block_start:block_start_end]
+                    block_title = block[text_block_start:text_block_end]
                     return (link_target, block_title)
                 # Find next relevant block start:
                 next_block_start_1 = _html.find("<tr class=\"odd", pos)
