@@ -22,10 +22,10 @@ go elsewhere.
 - easily start/stop and manage multiple docker-compose controlled
   services in one go
 
-- clean up all stopped containers and dangling volumes
-
 - creation of atomic snapshots of all your read-write volumes/live data
   without shutting down or pausing your containers (for backup purposes)
+
+- clean up all stopped containers and dangling volumes with one command
 
 - one self-contained file
 
