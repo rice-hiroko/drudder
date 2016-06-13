@@ -197,6 +197,7 @@ import datetime
 import json
 import multiprocessing
 import os
+import platform
 import pty
 import queue
 import subprocess
@@ -210,19 +211,103 @@ import time
 import traceback
 import uuid
 
+class YAMLInstallInfo(object):
+    @staticmethod
+    def test_for_yaml():
+        try:
+            import yaml
+            return True
+        except ImportError:
+            path = custom_yaml_install_path()
+            if path != None:
+                return True
+        return False
+
+    @staticmethod
+    def custom_yaml_install_path_parent():
+        if platform.system().lower() == "windows":
+            return os.path.join(os.environ['WINDIR'], "PyYaml-drudder")
+        else:
+            return os.path.join("/var", "lib", "PyYaml-drudder")
+
+    @staticmethod
+    def custom_yaml_install_path():
+        parent_folder = YAMLInstaller.custom_yaml_install_path_parent()
+        for fname in os.listdir(parent_folder):
+            if fname.startswith("PyYAML-"):
+                full_path = os.path.join(parent_folder, fname)
+                if os.path.isdir(full_path):
+                    return full_path
+        return None
+        
+
 yaml_available = False
 try:
     import yaml
     yaml_available = True
 except ImportError:
     yaml_available = False
+    yml_lib_path = YAMLInstallInfo.custom_yaml_install_path()
+    if yml_lib_path != None and os.path.exists(yml_lib_path):
+        sys.path.insert(0, yml_lib_path)
+        try:
+            import yaml
+            yaml_available = True
+        except ImportError:
+            pass
     pass
+
+class Installer(object):
+    @staticmethod
+    def install_docker_machine():
+        pass
+
+    @staticmethod
+    def install_yaml():
+        if YAMLInstallInfo.test_for_yaml():
+            # YAML is available, nothing to do.
+            return
+        
+
+    @staticmethod
+    def install_docker():
+        path_to_docker = SystemInfo.docker_path(fail_if_not_found=False)
+        if path_to_docker != None:
+            # Docker is already installed, nothing to do.
+            return
+
+        # Get docker machine:
+
+    @staticmethod
+    def install_docker_compose(force_upgrade=False):
+        if not force_upgrade:
+            path_to_dc = SystemInfo.docker_compose_path(
+                fail_if_not_found=False)
+            if path_to_dc != None:
+                # docker-compose is already installed, nothing to do.
+                return
 
 class SystemInfo(object):
     """ This class provides system info of various sorts about the installed
         docker versions, btrfs and more.
     """
     __cached_docker_path = None
+
+    @staticmethod
+    def yesno(text, default_yes=False):
+        if not default_yes:
+            appendix = " [y/N]"
+        else:
+            appendix = " [Y/n]"
+        ask_text = text + appendix
+        result = input(ask_text).lower().strip()
+        if result == "y" or result == "yes":
+            return True
+        if result == "n" or result == "no":
+            return False
+        if default_yes:
+            return True
+        return False
 
     @staticmethod
     def locate_binary(name):
@@ -332,7 +417,7 @@ class SystemInfo(object):
             return base64.b64decode(result_dict["result"])
 
     @staticmethod
-    def docker_path():
+    def docker_path(fail_if_not_found=True):
         """ Locate docker binary and return its path, or print an error
             and exit the program with sys.exit(1) if not available.
         """
@@ -357,8 +442,10 @@ class SystemInfo(object):
                 continue
             if behaves_like_docker(bin_path):
                 return bin_path
-        print("drudder: error: no docker found. Is it installed?")
-        sys.exit(1)
+        if fail_if_not_found is True:
+            print("drudder: error: no docker found. Is it installed?")
+            sys.exit(1)
+        return None
     
     @staticmethod
     def is_btrfs_subvolume(path):
@@ -445,16 +532,18 @@ class SystemInfo(object):
 
 
     @staticmethod
-    def docker_compose_path():
+    def docker_compose_path(fail_if_not_found=True):
         """ Locate docker-compose binary and return its path, or exit process
             with error if not available.
         """
         bin_path = SystemInfo.locate_binary("docker-compose")
         if bin_path != None:
             return bin_path
-        print("drudder: error: no docker-compose found. " + \
-            "Is it installed?")
-        sys.exit(1)
+        if fail_if_not_found:
+            print("drudder: error: no docker-compose found. " + \
+                "Is it installed?")
+            sys.exit(1)
+        return None
 
     @staticmethod
     def btrfs_path():
@@ -610,8 +699,12 @@ def yaml_error():
         print("drudder: error: no PyYaml available. (pip3 is also " +\
             "unavailable??)", file=sys.stderr)
 if not yaml_available:
-    yaml_error()
-    sys.exit(1)
+    print("drudder: warning: PyYAML is unavailable. Invoking installer...")
+    if SystemInfo.yesno("Do you want to install PyYAML?", default_yes=True):
+        Installer.install_yaml()
+    else:
+        yaml_error()
+        sys.exit(1)
 
 class DoubleLineBreakFormatter(HelpFormatter):
     """ Retains double line breaks/paragraphs """
