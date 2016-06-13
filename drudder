@@ -264,17 +264,59 @@ class Installer(object):
         return version_tag
 
     @staticmethod
+    def latest_docker_compose_version():
+        import urllib.request
+        tag_url = "https://github.com/docker/compose/releases/latest/"
+        try:
+            target = urllib.request.urlopen(tag_url)
+            final_url = target.geturl()
+            try:
+                final_url = final_url.decode("utf-8")
+            except AttributeError:
+                pass
+            if final_url.endswith("/"):
+                final_url = final_url[:-1]
+            version_tag = final_url.rpartition("/")[2]
+        except Exception as e:
+            raise RuntimeError("failed to obtain docker-compose version tag")
+        return version_tag
+
+    @staticmethod
     def install_docker_machine():
-        if SystemInfo.docker_machine_path(fail_if_not_found=False) \
-                != None:
+        return Installer.install_docker_tool(
+            tool_name="docker-machine")
+
+    @staticmethod
+    def install_docker_compose():
+        return Installer.install_docker_tool(
+            tool_name="docker-compose")
+
+    @staticmethod
+    def install_docker_tool(tool_name=None):
+        if tool_name == None:
+            raise ValueError(
+                "provide the name of the tool to be installed!")
+
+        if tool_name == "docker-machine":
+            path_func = SystemInfo.docker_machine_path
+            version_func = Installer.latest_docker_machine_version
+            short_name = "machine"
+        elif tool_name == "docker-compose":
+            path_func = SystemInfo.docker_compose_path
+            versoin_func = Installer.latest_docker_compose_version
+            short_name = "compose"
+        else:
+            raise ValueError("unsupported docker tool: " + tool_name)
+
+        if path_func(fail_if_not_found=False) != None:
             # Already installed, nothing to do.
             return
 
         # Follow the "latest" URL to the actual latest tag:
         try:
-            version_tag = Installer.latest_docker_machine_version()
+            version_tag = version_func()
         except RuntimeError:
-            print("drudder: error: failed to obtain docker-machine " +\
+            print("drudder: error: failed to obtain " + tool_name +\
                 "version tag",
                 file=sys.stderr)
             print("Please check your internet connectivity.",
@@ -283,24 +325,28 @@ class Installer(object):
 
         import urllib.request
         
-        # Put together docker-machine download URL:
+        # Put together the download URL:
         # Reference URL:
         # https://github.com/docker/machine/releases/download/
         #   v0.7.0/docker-machine-`uname -s`-`uname -m`
         if platform.system().lower() == "windows":
-            url = "https://github.com/docker/machine/releases/" +\
-                "download/" + str(version_tag) + "/docker-machine-" +\
+            url = "https://github.com/docker/" + short_name +\
+                "/releases/" +\
+                "download/" + str(version_tag) + "/docker-" +\
+                short_name + "-" +\
                 "Windows-x86_64.exe"
         else:
-            url = "https://github.com/docker/machine/releases/" +\
-                "download/" + str(version_tag) + "/docker-machine-" +\
+            url = "https://github.com/docker/" +\
+                short_name + "/releases/" +\
+                "download/" + str(version_tag) + "/docker-" +\
+                short_name + "-" +\
                 subprocess.check_output(["uname", "-s"]).\
                     decode("utf-8").strip() + "-" +\
                 subprocess.check_output(["uname", "-m"]).\
                     decode("utf-8").strip()
 
         # Download docker-machine binary:
-        print("Downloading docker-machine... (this might take " +\
+        print("Downloading " + tool_name + "... (this might take " +\
                 "a while)")
         try:
             local_filename, headers = urllib.request.urlretrieve(
@@ -314,24 +360,24 @@ class Installer(object):
 
         # Put binary into place for use:
         if platform.system().lower() == "windows":
-            docker_machine_target = os.path.join(os.environ['WINDIR'],
-                "system32", "docker-machine.exe")
+            docker_tool_target = os.path.join(os.environ['WINDIR'],
+                "system32", tool_name + ".exe")
         else:
-            docker_machine_target = os.path.join("/usr", "local", "bin",
-                "docker-machine")
+            docker_tool_target = os.path.join("/usr", "local", "bin",
+                tool_name)
         try:
-            shutil.copy(local_filename, docker_machine_target)
+            shutil.copy(local_filename, docker_tool_target)
         except Exception as e:
             print("drudder: error: failed to create path: " +\
-                str(docker_machine_target), file=sys.stderr)
+                str(docker_tool_target), file=sys.stderr)
             print("Please rerun this with sudo / administrator " +\
                 "privileges.", file=sys.stderr)
             sys.exit(1)
 
         # Set executable flag (+x):
         import stat
-        os.chmod(docker_machine_target,
-            os.stat(docker_machine_target).st_mode
+        os.chmod(docker_tool_target,
+            os.stat(docker_tool_target).st_mode
             | stat.S_IEXEC)
 
     @staticmethod
@@ -341,6 +387,8 @@ class Installer(object):
             missing.append("PyYAML")
         if not SystemInfo.docker_machine_path(fail_if_not_found=False):
             missing.append("docker-machine")
+        if not SystemInfo.docker_compose_path(fail_if_not_found=False):
+            missing.append("docker-compose")
 
         if len(missing) > 0: 
             print("drudder: warning: there are missing packages: " +\
@@ -352,6 +400,8 @@ class Installer(object):
                         Installer.install_yaml()
                     elif component == "docker-machine":
                         Installer.install_docker_machine()
+                    elif component == "docker-compose":
+                        Installer.install_docker_compose()
             else:
                 print("drudder: error: missing components: " +\
                     ", ".join(missing))
