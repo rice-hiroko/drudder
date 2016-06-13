@@ -37,7 +37,7 @@ go elsewhere.
 
 ## Basics
 
-This are the basic required commands for a simple single machine setup
+These are the basic required commands for a simple single machine setup
 where all your services are located on the local filesystem inside
 the folder ```/srv/```.
 (see the section ```HOW TO add your service``` for details on how those
