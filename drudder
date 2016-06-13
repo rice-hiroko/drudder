@@ -402,7 +402,7 @@ class Installer(object):
         missing = []
         if not YAMLInstallInfo.test_for_yaml():
             missing.append("PyYAML")
-        if not Systeminfo.docker_path(fail_if_not_found=False):
+        if not SystemInfo.docker_path(fail_if_not_found=False):
             missing.append("docker")
         if not SystemInfo.docker_machine_path(fail_if_not_found=False):
             missing.append("docker-machine")
@@ -662,7 +662,7 @@ class Installer(object):
                     enabled=1
                     gpgcheck=1
                     gpgkey=https://yum.dockerproject.org/gpg
-                    """)
+                    """))
             except OSError:
                 print("drudder: error: failed to create file: " +\
                     str(sources_lst_file))
