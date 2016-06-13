@@ -373,6 +373,8 @@ class Installer(object):
                 yaml_source_link)
             source_extract_path = os.path.join(
                 parent_path, "PyYaml.tar.gz")
+            shutil.copy(local_filename, source_extract_path)
+            os.remove(local_filename)
         except Exception as e:
             print("drudder: error: failed to obtain " + str(
                 yaml_source_link_url),
