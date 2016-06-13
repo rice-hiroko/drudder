@@ -263,7 +263,7 @@ class Installer(object):
         if len(missing) > 0: 
             print("drudder: warning: there are missing packages: " +\
                 ", ".join(missing) + ". Invoking installer...")
-            if SystemInfo.yesno("Do you want to install: ",
+            if SystemInfo.yesno("Do you want to install: " +\
                     ", ".join(missing), default_yes=True):
                 for component in missing:
                     if component == "PyYAML":
