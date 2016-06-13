@@ -303,7 +303,7 @@ class Installer(object):
             short_name = "machine"
         elif tool_name == "docker-compose":
             path_func = SystemInfo.docker_compose_path
-            versoin_func = Installer.latest_docker_compose_version
+            version_func = Installer.latest_docker_compose_version
             short_name = "compose"
         else:
             raise ValueError("unsupported docker tool: " + tool_name)
