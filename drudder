@@ -263,9 +263,9 @@ class Installer(object):
             url = "https://github.com/docker/machine/releases/" +\
                 "download/latest/docker-machine-" +\
                 subprocess.check_output(["uname", "-s"]).\
-                    decode("utf-8") + "-" +\
+                    decode("utf-8").strip() + "-" +\
                 subprocess.check_output(["uname", "-m"]).\
-                    decode("utf-8")
+                    decode("utf-8").strip()
 
             # Download docker-machine binary:
             try:
