@@ -312,6 +312,7 @@ class Installer(object):
             raise ValueError(
                 "provide the name of the tool to be installed!")
 
+        # Getting various helper functions:
         if tool_name == "docker-machine":
             path_func = SystemInfo.docker_machine_path
             version_func = Installer.latest_docker_machine_version
@@ -323,6 +324,7 @@ class Installer(object):
         else:
             raise ValueError("unsupported docker tool: " + tool_name)
 
+        # Check if the given tool is already installed:
         if path_func(fail_if_not_found=False) != None:
             # Already installed, nothing to do.
             return
@@ -385,7 +387,7 @@ class Installer(object):
         except Exception as e:
             print("drudder: error: failed to create path: " +\
                 str(docker_tool_target), file=sys.stderr)
-            print("Please rerun this with sudo / administrator " +\
+            print("Please re-run this with sudo / administrator " +\
                 "privileges.", file=sys.stderr)
             sys.exit(1)
 
@@ -400,6 +402,8 @@ class Installer(object):
         missing = []
         if not YAMLInstallInfo.test_for_yaml():
             missing.append("PyYAML")
+        if not Systeminfo.docker_path(fail_if_not_found=False):
+            missing.append("docker")
         if not SystemInfo.docker_machine_path(fail_if_not_found=False):
             missing.append("docker-machine")
         if not SystemInfo.docker_compose_path(fail_if_not_found=False):
@@ -417,6 +421,8 @@ class Installer(object):
                         Installer.install_docker_machine()
                     elif component == "docker-compose":
                         Installer.install_docker_compose()
+                    elif component == "docker":
+                        Installer.install_docker()
             else:
                 print("drudder: error: missing components: " +\
                     ", ".join(missing))
@@ -510,7 +516,7 @@ class Installer(object):
             except OSError:
                 print("drudder: error: failed to create path: " +\
                     str(parent_path), file=sys.stderr)
-                print("Please rerun this with sudo / administrator " +\
+                print("Please re-run this with sudo / administrator " +\
                     "privileges.", file=sys.stderr)
                 sys.exit(1)
 
@@ -538,12 +544,113 @@ class Installer(object):
 
     @staticmethod
     def install_docker():
+        # Check if already installed:
         path_to_docker = SystemInfo.docker_path(fail_if_not_found=False)
         if path_to_docker != None:
             # Docker is already installed, nothing to do.
             return
 
-        # Get docker machine:
+        # Detect distribution:
+        distribution = None
+        distribution_codename = None
+        distribution_version = None
+        if os.path.exists("/etc/lsb-release"):
+            with open("/etc/lsb-release") as f:
+                contents = f.read()
+            try:
+                contents = contents.decode("utf-8", "replace")
+            except AttributeError:
+                pass
+            contents = contents.replace("\r\n", "\n").replace("\r", "\n")
+            for line in contents.split("\n"):
+                _line = line.strip()
+                if _line.startswith("DISTRIB_ID="):
+                    distribution = _line.partition("=")[2].lower()
+                elif _line.startswith("DISTRIB_CODENAME"):
+                    distribution_codename = _line.partition("=")[2].lower()
+                elif _line.startswith("DISTRIB_RELEASE"):
+                    distribution_version = _line.partition("=")[2]
+        if distribution == None and os.path.exists("/etc/redhat-release"):
+            with open("/etc/redhat-release") as f:
+                contents = f.read()
+            try:
+                contents = contents.decode("utf-8", "replace")
+            except AttributeError:
+                pass
+            contents = contents.strip()
+            if contents.startswith("Fedora release "):
+                distribution = "fedora"
+                distribution_version = contents[len("Fedora release "):].lstrip()
+                distribution_version = distribution_version.partition(" ")[0]
+        if distribution == None:
+            print("drudder: error: failed to obtain detect distribution. " +\
+                "This distribution is most likely not supported for " +\
+                "docker install.",
+                file=sys.stderr)
+            print("If you want to help change this, please file a ticket "+\
+                "at " + str(BUGS_URL), file=sys.stderr)
+            sys.exit(1)
+
+        # Debian/Ubuntu docker install:
+        if distribution == "ubuntu" or distribution == "debian":
+            if distribution_codename == None:
+                print("drudder: error: failed to detect detailed " +\
+                    "distribution code name: " + distribution,
+                    file=sys.stderr)
+                print("Please report this problem at " + BUGS_URL,
+                    file=sys.stderr)
+                sys.exit(1)
+            try:
+                subprocess.check_output(["apt-key", "adv", "--keyserver",
+                    "hkp://p80.pool.sks-keyservers.net:80", "--recv-keys",
+                    "58118E89F3A912897C070ADBF76221572C52609D"])
+            except subprocess.CalledProcessError:
+                print("drudder: error: distribution key import failed.",
+                    file=sys.stderr) 
+                print("Please re-run this with sudo / administrator " +\
+                    "privileges, and check your internet connectivity.",
+                    file=sys.stderr)
+                print("If you think this is a bug, please file a ticket "+\
+                    "at " + str(BUGS_URL), file=sys.stderr)
+                sys.exit(1)
+            sources_lst_file = os.path.join("/etc", "apt", "sources.list.d",
+                "docker.list")
+            if os.path.exists(sources_lst_file):
+                try:
+                    os.remove(sources_lst_file)
+                except OSError:
+                    print("drudder: error: failed to remove file: " +\
+                        str(sources_lst_file))
+                    print("Please re-run this with sudo / administrator " +\
+                        "privileges", file=sys.stderr)
+                    sys.exit(1)
+            try:
+                with open(sources_lst_file, "w") as f:
+                    f.write("deb https://apt.dockerproject.org/repo " +\
+                        distribution + "-" + distribution_codename + " main")
+            except OSError:
+                print("drudder: error: failed to create file: " +\
+                    str(sources_lst_file))
+                print("Please re-run this with sudo / administrator " +\
+                    "privileges", file=sys.stderr)
+                sys.exit(1)
+
+            # Install docker-engine:
+            subprocess.check_output(["apt-get", "update"])
+            subprocess.check_output(["apt-get", "install", "-y",
+                "docker-engine"])
+            return
+        # Fedora docker install:
+        elif distribution == "fedora":
+            
+        # Others:
+        else:
+            print("drudder: error: unsupported distribution: " + str(
+                distribution))
+            print("If you want to help change this, please file a ticket "+\
+                "at " + str(BUGS_URL), file=sys.stderr)
+            sys.exit(1)
+
 
 # Only import this on Unix systems:
 if platform.system().lower() != "windows":
