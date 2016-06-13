@@ -227,9 +227,9 @@ class YAMLInstallInfo(object):
     @staticmethod
     def custom_yaml_install_path_parent():
         if platform.system().lower() == "windows":
-            return os.path.join(os.environ['WINDIR'], "PyYaml-drudder")
+            return os.path.join(os.environ['WINDIR'], "drudder-PyYAML")
         else:
-            return os.path.join("/var", "lib", "PyYaml-drudder")
+            return os.path.join("/var", "lib", "drudder-PyYAML")
 
     @staticmethod
     def custom_yaml_install_path():
@@ -246,45 +246,52 @@ class YAMLInstallInfo(object):
 
 class Installer(object):
     @staticmethod
+    def latest_docker_machine_version():
+        import urllib.request
+        tag_url = "https://github.com/docker/machine/releases/latest/"
+        try:
+            target = urllib.request.urlopen(tag_url)
+            final_url = target.geturl()
+            try:
+                final_url = final_url.decode("utf-8")
+            except AttributeError:
+                pass
+            if final_url.endswith("/"):
+                final_url = final_url[:-1]
+            version_tag = final_url.rpartition("/")[2]
+        except Exception as e:
+            raise RuntimeError("failed to obtain docker-machine version tag")
+        return version_tag
+
+    @staticmethod
     def install_docker_machine():
         if SystemInfo.docker_machine_path(fail_if_not_found=False) \
                 != None:
             # Already installed, nothing to do.
             return
 
-        # Get the docker machine download link:
+        # Follow the "latest" URL to the actual latest tag:
+        try:
+            version_tag = Installer.latest_docker_machine_version()
+        except RuntimeError:
+            print("drudder: error: failed to obtain docker-machine " +\
+                "version tag",
+                file=sys.stderr)
+            print("Please check your internet connectivity.",
+                file=sys.stderr)
+            sys.exit(1)
+
         import urllib.request
+        
+        # Put together docker-machine download URL:
+        # Reference URL:
+        # https://github.com/docker/machine/releases/download/
+        #   v0.7.0/docker-machine-`uname -s`-`uname -m`
         if platform.system().lower() == "windows":
-            raise NotImplementedError("windows download URL not " +\
-                "implemented")
+            url = "https://github.com/docker/machine/releases/" +\
+                "download/" + str(version_tag) + "/docker-machine-" +\
+                "Windows-x86_64.exe"
         else:
-            # Reference URL:
-            # https://github.com/docker/machine/releases/download/
-            #   v0.7.0/docker-machine-`uname -s`-`uname -m`
-
-            # Follow the "latest" URL to the actual latest tag:
-            tag_url = 'https://github.com/docker/machine/releases/' +\
-                'latest'
-            try: 
-                target = urllib.request.urlopen(tag_url)
-                final_url = target.geturl()
-                try:
-                    final_url = final_url.decode("utf-8")
-                except AttributeError:
-                    pass
-                if final_url.endswith("/"):
-                    final_url = final_url[:-1]
-                version_tag = final_url.rpartition("/")[2]
-            except Exception as e:
-                print("drudder: error: failed to obtain " + tag_url,
-                    file=sys.stderr)
-                print("Please check your internet connectivity.",
-                    file=sys.stderr)
-                sys.exit(1)
-
-            # Download docker-machine:
-            print("Downloading docker-machine... (this might take " +\
-                "a while)")
             url = "https://github.com/docker/machine/releases/" +\
                 "download/" + str(version_tag) + "/docker-machine-" +\
                 subprocess.check_output(["uname", "-s"]).\
@@ -292,34 +299,40 @@ class Installer(object):
                 subprocess.check_output(["uname", "-m"]).\
                     decode("utf-8").strip()
 
-            # Download docker-machine binary:
-            try:
-                local_filename, headers = urllib.request.urlretrieve(
-                    url)
-            except Exception as e:
-                print("drudder: error: failed to obtain " + str(url),
-                    file=sys.stderr)
-                print("Please check your internet connectivity.",
-                    file=sys.stderr)
-                sys.exit(1)
+        # Download docker-machine binary:
+        print("Downloading docker-machine... (this might take " +\
+                "a while)")
+        try:
+            local_filename, headers = urllib.request.urlretrieve(
+                url)
+        except Exception as e:
+            print("drudder: error: failed to obtain " + str(url),
+                file=sys.stderr)
+            print("Please check your internet connectivity.",
+                file=sys.stderr)
+            sys.exit(1)
 
-            # Put binary into place for use:
+        # Put binary into place for use:
+        if platform.system().lower() == "windows":
+            docker_machine_target = os.path.join(os.environ['WINDIR'],
+                "system32", "docker-machine.exe")
+        else:
             docker_machine_target = os.path.join("/usr", "local", "bin",
                 "docker-machine")
-            try:
-                shutil.copy(local_filename, docker_machine_target)
-            except Exception as e:
-                print("drudder: error: failed to create path: " +\
-                    str(docker_machine_target), file=sys.stderr)
-                print("Please rerun this with sudo / administrator " +\
-                    "privileges.", file=sys.stderr)
-                sys.exit(1)
+        try:
+            shutil.copy(local_filename, docker_machine_target)
+        except Exception as e:
+            print("drudder: error: failed to create path: " +\
+                str(docker_machine_target), file=sys.stderr)
+            print("Please rerun this with sudo / administrator " +\
+                "privileges.", file=sys.stderr)
+            sys.exit(1)
 
-            # Set executable flag (+x):
-            import stat
-            os.chmod(docker_machine_target,
-                os.stat(docker_machine_target).st_mode
-                | stat.S_IEXEC)
+        # Set executable flag (+x):
+        import stat
+        os.chmod(docker_machine_target,
+            os.stat(docker_machine_target).st_mode
+            | stat.S_IEXEC)
 
     @staticmethod
     def check_and_install_missing():
@@ -333,7 +346,7 @@ class Installer(object):
             print("drudder: warning: there are missing packages: " +\
                 ", ".join(missing) + ". Invoking installer...")
             if SystemInfo.yesno("Do you want to install: " +\
-                    ", ".join(missing), default_yes=True):
+                    ", ".join(missing), default_yes=False):
                 for component in missing:
                     if component == "PyYAML":
                         Installer.install_yaml()
