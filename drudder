@@ -218,7 +218,7 @@ class YAMLInstallInfo(object):
             import yaml
             return True
         except ImportError:
-            path = custom_yaml_install_path()
+            path = YAMLInstallInfo.custom_yaml_install_path()
             if path != None:
                 return True
         return False
