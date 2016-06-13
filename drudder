@@ -299,11 +299,9 @@ class Installer(object):
             sys.exit(1)
         def extract_source_link():
             _html = html
-            print("EXAMINING HTML: " + str(_html))
             pos = 0
             while True:
                 def extract_block_url_title(block):
-                    print("EXAMINING BLOCK: " + str(block))
                     link_start = block.find("<a href=\"")
                     if link_start < 0:
                         return (None, None)
