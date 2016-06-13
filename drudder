@@ -378,7 +378,7 @@ class Installer(object):
         import stat
         os.chmod(docker_tool_target,
             os.stat(docker_tool_target).st_mode
-            | stat.S_IEXEC)
+            | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
     @staticmethod
     def check_and_install_missing():
