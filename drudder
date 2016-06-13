@@ -253,6 +253,7 @@ class Installer(object):
             return
 
         # Get the docker machine download link:
+        import urllib.request
         if platform.system().lower() == "windows":
             raise NotImplementedError("windows download URL not " +\
                 "implemented")
@@ -265,7 +266,7 @@ class Installer(object):
             tag_url = 'https://github.com/docker/machine/releases/' +\
                 'latest'
             try: 
-                target = urllib2.urlopen(tag_url)
+                target = urllib.request.urlopen(tag_url)
                 final_url = target.geturl()
                 try:
                     final_url = final_url.decode("utf-8")
@@ -282,6 +283,8 @@ class Installer(object):
                 sys.exit(1)
 
             # Download docker-machine:
+            print("Downloading docker-machine... (this might take " +\
+                "a while)")
             url = "https://github.com/docker/machine/releases/" +\
                 "download/" + str(version_tag) + "/docker-machine-" +\
                 subprocess.check_output(["uname", "-s"]).\
@@ -435,6 +438,8 @@ class Installer(object):
 
         # Get source:
         try:
+            print("Downloading PyYAML... (this might take " +\
+                "a while)")
             local_filename, headers = urllib.request.urlretrieve(
                 yaml_source_link)
             source_extract_path = os.path.join(
