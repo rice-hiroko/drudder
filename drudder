@@ -274,7 +274,10 @@ class SubprocessHelper(object):
                     return
                 while True:
                     try:
-                        c = self.fileobj.read(1)
+                        try:
+                            c = self.fileobj.read(1)
+                        except ValueError:
+                            raise OSError("file object invalid")
 
                         # Make sure it is bytes:
                         try:
