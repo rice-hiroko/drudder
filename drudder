@@ -885,8 +885,8 @@ class Installer(object):
                     ["apt-get", "update"],
                     stderr=subprocess.STDOUT)
             except subprocess.CalledProcessError as e:
-                if e.output.find("E: The method driver " +\
-                        "/usr/lib/apt/methods/https could not be found") >= 0:
+                if e.output.find(b"E: The method driver " +\
+                        b"/usr/lib/apt/methods/https could not be found") >= 0:
                     SubprocessHelper.check_output_with_stdout_copy(
                         ["apt-get", "install", "apt-transport-https"],
                         stderr=subprocess.STDOUT)
