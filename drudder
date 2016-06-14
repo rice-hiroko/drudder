@@ -255,7 +255,7 @@ class SubprocessHelper(object):
         else:
             process = subprocess.Popen([sys.executable,
                 "-c", "import pty; import sys; " +\
-                "pty.spawn(sys.argv[1:]"] + cmd)
+                "pty.spawn(sys.argv[1:])"] + cmd)
 
         # Output reader thread definition:
         class OutputReader(threading.Thread):
