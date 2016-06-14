@@ -326,7 +326,7 @@ class SubprocessHelper(object):
             new_error = subprocess.CalledProcessError(
                 cmd=cmd, returncode=exit_code)
             if stdout_reader != None:
-                new_error.output = stdout_reader.complete_output
+                new_error.output = presented_output_store["data"]
             raise new_error
         if stdout_reader != None or (stderr_reader != None and \
                 stderr == subprocess.STDOUT):
