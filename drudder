@@ -961,6 +961,7 @@ class Installer(object):
                 try:
                     print("drudder: info: [Installer/docker] running: " +\
                         "apt-get install -y docker-engine")
+                    media_error["temp_output"] = b""
                     SubprocessHelper.check_output_with_stdout_copy(
                         ["apt-get", "install", "-y", "docker-engine"],
                         stderr=subprocess.STDOUT, pty=True,
@@ -972,6 +973,15 @@ class Installer(object):
                     time.sleep(1)
                     print("drudder: info: resetting terminal after " +\
                         "previous command was aborted")
+
+                    # If this is not the first time we're here, abort:
+                    if attempts >= 1:
+                        print("drudder: error: failed to fix missing " +\
+                            "cd-rom media problem. Aborting.",
+                            file=sys.stderr)
+                        print("This is most likely a bug. Please report "+\
+                            "it to " + str(BUG_URL), file=sys.stderr)
+                        sys.exit(1)
 
                     print("drudder: warning: missing install media " +\
                         "reference detected. Running: " +\
