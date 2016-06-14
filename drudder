@@ -954,46 +954,30 @@ class Installer(object):
                     raise RuntimeError("aborting - missing install media")
 
             # Install docker-engine package:
-            print("drudder: info: [Installer/docker] Running: " +\
-                "apt-get install -y docker-engine")
-            attempts = 0
-            while attempts < 2:
-                try:
-                    print("drudder: info: [Installer/docker] running: " +\
-                        "apt-get install -y docker-engine")
-                    media_error["temp_output"] = b""
-                    SubprocessHelper.check_output_with_stdout_copy(
-                        ["apt-get", "install", "-y", "docker-engine"],
-                        stderr=subprocess.STDOUT, pty=True,
-                        write_function=media_change_error_detection)
-                except RuntimeError:
-                    # Try to repair terminal after aborting previous command:
-                    time.sleep(1)
-                    subprocess.call(["reset"], shell=True)
-                    time.sleep(1)
-                    print("drudder: info: resetting terminal after " +\
-                        "previous command was aborted")
+            try:
+                print("drudder: info: [Installer/docker] running: " +\
+                    "apt-get install -y docker-engine")
+                media_error["temp_output"] = b""
+                SubprocessHelper.check_output_with_stdout_copy(
+                    ["apt-get", "install", "-y", "docker-engine"],
+                    stderr=subprocess.STDOUT, pty=True,
+                    write_function=media_change_error_detection)
+            except RuntimeError:
+                # Media change hang occured. Abort, and tell user:
+                time.sleep(0.5)
+                subprocess.call(["reset"]) # fix terminal
+                time.sleep(0.5)
 
-                    # If this is not the first time we're here, abort:
-                    if attempts >= 1:
-                        print("drudder: error: failed to fix missing " +\
-                            "cd-rom media problem. Aborting.",
-                            file=sys.stderr)
-                        print("This is most likely a bug. Please report "+\
-                            "it to " + str(BUG_URL), file=sys.stderr)
-                        sys.exit(1)
-
-                    print("drudder: warning: missing install media " +\
-                        "reference detected. Running: " +\
-                        "apt-get update --fix-missing", file=sys.stderr)
-                    # Media change error occured. Fix repositories:
-                    SubprocessHelper.check_output_with_stdout_copy(
-                        ["apt-get", "update", "--fix-missing"],
-                        stderr=subprocess.STDOUT)
-
-                    attempts += 1
-                    continue
-                break
+                # Tell user:
+                print("drudder: error: your apt sources depend on " +\
+                    "an install media that is not present. " +\
+                    "Please fix your apt sources, or provide the " +\
+                    "required install media (CD-ROM, ...).", file=sys.stderr)
+                print("This is usually a user error.", file=sys.stderr)
+                print("If you are certain this is a bug in " +\
+                    "drudder, please report it at " + str(BUG_URL),
+                    file=sys.stderr)
+                sys.exit(1)
             return
         # Fedora docker install:
         elif distribution == "fedora":
