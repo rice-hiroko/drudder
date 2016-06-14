@@ -219,6 +219,7 @@ import queue
 import subprocess
 import random
 import re
+import shlex
 import shutil
 import sys
 import textwrap
@@ -230,7 +231,7 @@ import uuid
 class SubprocessHelper(object):
     @staticmethod
     def check_output_with_stdout_copy(cmd, shell=False, stdout=None,
-            stderr=None, cwd=None, env=None):
+            stderr=None, cwd=None, env=None, pty=False, write_function=None):
         # Get actual stdout/stderr as to be used internally:
         actual_stdout = stdout
         if stdout == None or stdout == sys.stderr:
@@ -247,9 +248,14 @@ class SubprocessHelper(object):
             env = os.environ.copy()
 
         # Launch command:
-        process = subprocess.Popen(cmd, shell=shell,
-            stdout=actual_stdout, stderr=actual_stderr,
-            cwd=cwd, env=env)
+        if not pty:
+            process = subprocess.Popen(cmd, shell=shell,
+                stdout=actual_stdout, stderr=actual_stderr,
+                cwd=cwd, env=env)
+        else:
+            process = subprocess.Popen([sys.executable,
+                "-c", "import pty; import sys; " +\
+                "pty.spawn(sys.argv[1:]"] + cmd)
 
         # Output reader thread definition:
         class OutputReader(threading.Thread):
@@ -292,6 +298,14 @@ class SubprocessHelper(object):
             "data" : b""
         }
         def writer(data):
+            try:
+                if write_function != None:
+                    write_function(data)
+            except Exception:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
             presented_output_store["data"] += data
         if actual_stdout == subprocess.PIPE:  # we need to collect stdout.
             copy_to = stdout
@@ -902,12 +916,22 @@ class Installer(object):
                     raise e
                 break
 
+            # Helper function to find out missing media sources:
+            media_error = { "occured" : False, "temp_output" : b"" }
+            def media_change_error_detection(data):
+                media_error["temp_output"] += data
+                if media_error["temp_output"].find(
+                        b"Media change: please insert the disc") >= 0:
+                    media_error["occured"] = True
+                    raise RuntimeError("aborting - missing install media")
+
             # Install docker-engine package:
             print("[Installer/docker] Running: " +\
                 "apt-get install -y docker-engine")
             SubprocessHelper.check_output_with_stdout_copy(
                 ["apt-get", "install", "-y", "docker-engine"],
-                stderr=subprocess.STDOUT)
+                stderr=subprocess.STDOUT, pty=True,
+                write_function=media_change_error_detection)
             return
         # Fedora docker install:
         elif distribution == "fedora":
