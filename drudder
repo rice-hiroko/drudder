@@ -301,6 +301,7 @@ class SubprocessHelper(object):
         stderr_reader = None
         presented_output_store = {
             "data" : b""
+            "user_write_error" : None,
         }
         def writer(data):
             if len(data) == 0:
@@ -308,7 +309,8 @@ class SubprocessHelper(object):
             try:
                 if write_function != None:
                     write_function(data)
-            except Exception:
+            except Exception as e:
+                presented_output_store["user_write_error"] = str(e)
                 try:
                     process.kill()
                 except Exception:
@@ -343,16 +345,21 @@ class SubprocessHelper(object):
 
         # Evaluate whether it ran successfully:
         exit_code = process.returncode
+        got_data = None
+        if presented_output_store["user_write_error"] != None:
+            raise RuntimeError("specified write_function " +\
+                "encountered an error: " +\
+                str(presented_output_store["user_write_error"]))
+        if stdout_reader != None or (stderr_reader != None and \
+                stderr == subprocess.STDOUT):
+            got_data = presented_output_store["data"]
         if exit_code != 0:
             new_error = subprocess.CalledProcessError(
                 cmd=cmd, returncode=exit_code)
-            if stdout_reader != None:
-                new_error.output = presented_output_store["data"]
+            new_error.output = got_data
             raise new_error
-        if stdout_reader != None or (stderr_reader != None and \
-                stderr == subprocess.STDOUT):
-            return presented_output_store["data"]
-        return None
+
+        return got_data
 
     @staticmethod
     def check_output_with_isolated_pty(cmd, shell=False, cwd=None,
@@ -924,21 +931,31 @@ class Installer(object):
                 break
 
             # Helper function to find out missing media sources:
-            media_error = { "occured" : False, "temp_output" : b"" }
+            media_error = { "temp_output" : b"" }
             def media_change_error_detection(data):
                 media_error["temp_output"] += data
                 if media_error["temp_output"].find(
                         b"Media change: please insert the disc") >= 0:
-                    media_error["occured"] = True
                     raise RuntimeError("aborting - missing install media")
 
             # Install docker-engine package:
             print("[Installer/docker] Running: " +\
                 "apt-get install -y docker-engine")
-            SubprocessHelper.check_output_with_stdout_copy(
-                ["apt-get", "install", "-y", "docker-engine"],
-                stderr=subprocess.STDOUT, pty=True,
-                write_function=media_change_error_detection)
+            attempts = 0
+            while attempts < 2:
+                try:
+                    SubprocessHelper.check_output_with_stdout_copy(
+                        ["apt-get", "install", "-y", "docker-engine"],
+                        stderr=subprocess.STDOUT, pty=True,
+                        write_function=media_change_error_detection)
+                except RuntimeError:
+                    # Media change error occured. Fix repositories:
+                    SubprocessHelper.check_output_with_stdout_copy(
+                        ["apt-get", "update", "--fix-missing"],
+                        stderr=subprocess.STDOUT)
+                    attempts += 1
+                    continue
+                break
             return
         # Fedora docker install:
         elif distribution == "fedora":
