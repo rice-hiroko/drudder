@@ -694,18 +694,11 @@ class Installer(object):
 
             # Install docker-engine package:
             print("Invoking system update...")
-            p = subprocess.Popen([sys.executable, "-c",
-                "import pty; pty.spawn([\"dnf\", \"install\", "+\
-                "\"-y\", \"docker-engine\")"])
-            while True:
-                c = p.stdin.read()
-                sys.stdout.write(c)
-                sys.stodut.flush()
-            #exit_code = subprocess.call(["dnf", "install", "-y",
-            #    "docker-engine"])
-            #if exit_code != 0:
-            #    raise RuntimeError("command failed: " +\
-            #        "dnf install -y docker-engine")
+            exit_code = subprocess.call(["dnf", "install", \
+                "-y", "docker-engine"])
+            if exit_code != 0:
+                raise RuntimeError("command failed: " +\
+                    "dnf install -y docker-engine")
             return
         # Others:
         else:
