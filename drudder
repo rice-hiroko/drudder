@@ -587,7 +587,7 @@ class Installer(object):
                 elif _line.startswith("DISTRIB_RELEASE"):
                     distribution_version = _line.partition("=")[2]
         elif os.path.exists("/etc/os-release"):
-            with open("/etc/lsb-release") as f:
+            with open("/etc/os-release") as f:
                 contents = f.read()
             try:
                 contents = contents.decode("utf-8", "replace")
