@@ -255,7 +255,10 @@ class SubprocessHelper(object):
         else:
             process = subprocess.Popen([sys.executable,
                 "-c", "import pty; import sys; " +\
-                "pty.spawn(sys.argv[1:])"] + cmd)
+                "pty.spawn(sys.argv[1:])"] + cmd,
+                shell=shell,
+                stdout=actual_stdout, stderr=actual_stderr,
+                cwd=cwd, env=env)
 
         # Output reader thread definition:
         class OutputReader(threading.Thread):
@@ -300,6 +303,8 @@ class SubprocessHelper(object):
             "data" : b""
         }
         def writer(data):
+            if len(data) == 0:
+                return
             try:
                 if write_function != None:
                     write_function(data)
