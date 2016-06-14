@@ -694,9 +694,9 @@ class Installer(object):
                 pass
             exit_code = process.returncode
             print("ENTIRE OUTPUT: " + str(writer.complete_output))
-            #if exit_code != 0:
-            #    raise RuntimeError("command failed: " +\
-            #        "apt-get update")
+            if exit_code != 0:
+                raise RuntimeError("command failed: " +\
+                    "apt-get update")
             exit_code = subprocess.call(["apt-get", "install", "-y",
                 "docker-engine"])
             if exit_code != 0:
