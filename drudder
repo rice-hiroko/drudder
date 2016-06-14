@@ -926,7 +926,6 @@ class Installer(object):
             # Helper function to find out missing media sources:
             media_error = { "occured" : False, "temp_output" : b"" }
             def media_change_error_detection(data):
-                print("DATA: " + str(data))
                 media_error["temp_output"] += data
                 if media_error["temp_output"].find(
                         b"Media change: please insert the disc") >= 0:
