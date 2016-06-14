@@ -949,10 +949,15 @@ class Installer(object):
                         stderr=subprocess.STDOUT, pty=True,
                         write_function=media_change_error_detection)
                 except RuntimeError:
+                    # Try to repair terminal after aborting previous command:
+                    time.sleep(1)
+                    subprocess.call(["reset"], shell=True)
+
                     # Media change error occured. Fix repositories:
                     SubprocessHelper.check_output_with_stdout_copy(
                         ["apt-get", "update", "--fix-missing"],
                         stderr=subprocess.STDOUT)
+
                     attempts += 1
                     continue
                 break
