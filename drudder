@@ -230,7 +230,7 @@ import uuid
 class SubprocessHelper(object):
     @staticmethod
     def check_output_with_stdout_copy(cmd, shell=False, stdout=None,
-            stderr=None):
+            stderr=None, cwd=None, env=None):
         # Get actual stdout/stderr as to be used internally:
         actual_stdout = stdout
         if stdout == None or stdout == sys.stderr:
@@ -240,9 +240,16 @@ class SubprocessHelper(object):
                 stderr == sys.stderr:
             actual_stderr = subprocess.PIPE
 
+        # Handle various other parameters:
+        if cwd == None:
+            cwd = os.getcwd()
+        if env == None:
+            env = os.environ.copy()
+
         # Launch command:
         process = subprocess.Popen(cmd, shell=shell,
-            stdout=actual_stdout, stderr=actual_stderr)
+            stdout=actual_stdout, stderr=actual_stderr,
+            cwd=cwd, env=env)
 
         # Output reader thread definition:
         class OutputReader(threading.Thread):
@@ -300,6 +307,101 @@ class SubprocessHelper(object):
         if stdout_reader != None:
             return stdout_reader.complete_output
         return None
+
+    @staticmethod
+    def check_output_with_isolated_pty(cmd, shell=False, cwd=None,
+            stdout=None, stderr=None, timeout=None, env=None):
+        """ This is a re-implementation of subprocess.check_output() which
+            will isolate the child process in a pseudo-TTY to prevent it from
+            accessing the main terminal itself where drudder itself is
+            running from.
+        """
+        if cwd == None:
+            cwd = os.getcwd()
+        if stderr == None:
+            stderr = subprocess.DEVNULL
+        if env == None:
+            env = os.environ.copy()
+
+        parent_conn, child_conn = multiprocessing.Pipe()
+        pid, fd = pty.fork()
+
+        # Child with pseudo TTY (since some tools like to detect the terminal
+        # size and greatly mess with our parsing):
+        if pid == 0:
+            result_dict = dict()
+            error_happened = None
+            result = None
+            # Run actual command in forked process with fake TTY:
+            try:
+                if stdout != None:
+                    result = subprocess.check_output(cmd, shell=shell,
+                        cwd=cwd, stdout=stdout, stderr=stderr,
+                        timeout=timeout, env=env)
+                else:
+                    result = subprocess.check_output(cmd, shell=shell,
+                        cwd=cwd, stderr=stderr, timeout=timeout,
+                        env=env)
+                try:
+                    result = result.encode("utf-8", "replace")
+                except AttributeError:
+                    pass
+            except Exception as e:
+                if isinstance(e, CalledProcessError):
+                    result_dict["result"] = base64.b64encode(
+                        e.output).decode("utf-8", "ignore")
+                error_happened = e
+
+            # Collect result and send back to parent:
+            result_dict["error_happened"] = \
+                None if error_happened is None else str(
+                    error_happened)
+            if result != None:
+                result_dict["result"] = base64.b64encode(
+                    result).decode("utf-8", "ignore")
+            dumped = json.dumps(result_dict)
+            child_conn.send(dumped)
+            time.sleep(1)
+            child_conn.close()
+
+            # We're done. Parent will receive result and do stuff:
+            time.sleep(1)
+            os.exit(0)
+        else:
+            try:
+                # Wait for child to execute process and report result:
+                if timeout == None:
+                    result_dict = json.loads(parent_conn.recv())
+                else:
+                    if not parent_conn.poll(timeout):
+                        class PtyTimeoutError(subprocess.CalledProcessError):
+                            def __init__(self, exit_code, cmd, cwd):
+                                super().__init__(exit_code, cmd)
+                                self.cwd = cwd
+
+                            def __repr__(self):
+                                return "PtyTimeoutError: command " +\
+                                    "timed out: " + str(self.cmd) +\
+                                    " (cwd: " + str(self.cwd) + ")"
+
+                            def __str__(self):
+                                return self.__repr__()
+
+                        e = PtyTimeoutError(1, cmd, cwd)
+                        e.output = b""
+                        raise e
+                    result_dict = json.loads(parent_conn.recv())
+            finally:
+                parent_conn.close()
+            if result_dict["error_happened"] != None:
+                e = subprocess.CalledProcessError(1, cmd)
+                if result_dict["result"] != None:
+                    e.output = base64.b64decode(result_dict["result"])
+                else:
+                    e.output = b""
+                raise e
+            return base64.b64decode(result_dict["result"])
+
 
 class YAMLInstallInfo(object):
     @staticmethod
@@ -864,100 +966,6 @@ class SystemInfo(object):
         if output == None or len(output) == 0:
             return None
         return output
-
-    @staticmethod
-    def check_output_with_isolated_pty(cmd, shell=False, cwd=None,
-            stdout=None, stderr=None, timeout=None, env=None):
-        """ This is a re-implementation of subprocess.check_output() which
-            will isolate the child process in a pseudo-TTY to prevent it from
-            accessing the main terminal itself where drudder itself is
-            running from.
-        """
-        if cwd == None:
-            cwd = os.getcwd()
-        if stderr == None:
-            stderr = subprocess.DEVNULL
-        if env == None:
-            env = os.environ.copy()
-
-        parent_conn, child_conn = multiprocessing.Pipe()
-        pid, fd = pty.fork()
-
-        # Child with pseudo TTY (since some tools like to detect the terminal
-        # size and greatly mess with our parsing):
-        if pid == 0:
-            result_dict = dict()
-            error_happened = None
-            result = None
-            # Run actual command in forked process with fake TTY:
-            try:
-                if stdout != None:
-                    result = subprocess.check_output(cmd, shell=shell,
-                        cwd=cwd, stdout=stdout, stderr=stderr,
-                        timeout=timeout, env=env)
-                else:
-                    result = subprocess.check_output(cmd, shell=shell,
-                        cwd=cwd, stderr=stderr, timeout=timeout,
-                        env=env)
-                try:
-                    result = result.encode("utf-8", "replace")
-                except AttributeError:
-                    pass
-            except Exception as e:
-                if isinstance(e, CalledProcessError):
-                    result_dict["result"] = base64.b64encode(
-                        e.output).decode("utf-8", "ignore")
-                error_happened = e
-
-            # Collect result and send back to parent:
-            result_dict["error_happened"] = \
-                None if error_happened is None else str(
-                    error_happened)
-            if result != None:
-                result_dict["result"] = base64.b64encode(
-                    result).decode("utf-8", "ignore")
-            dumped = json.dumps(result_dict)
-            child_conn.send(dumped)
-            time.sleep(1)
-            child_conn.close()
-
-            # We're done. Parent will receive result and do stuff:
-            time.sleep(1)
-            os.exit(0)
-        else:
-            try:
-                # Wait for child to execute process and report result:
-                if timeout == None:
-                    result_dict = json.loads(parent_conn.recv())
-                else:
-                    if not parent_conn.poll(timeout):
-                        class PtyTimeoutError(subprocess.CalledProcessError):
-                            def __init__(self, exit_code, cmd, cwd):
-                                super().__init__(exit_code, cmd)
-                                self.cwd = cwd
-
-                            def __repr__(self):
-                                return "PtyTimeoutError: command " +\
-                                    "timed out: " + str(self.cmd) +\
-                                    " (cwd: " + str(self.cwd) + ")"
-
-                            def __str__(self):
-                                return self.__repr__()
-
-                        e = PtyTimeoutError(1, cmd, cwd)
-                        e.output = b""
-                        raise e
-                    result_dict = json.loads(parent_conn.recv())
-            finally:
-                parent_conn.close()
-            if result_dict["error_happened"] != None:
-                e = subprocess.CalledProcessError(1, cmd)
-                if result_dict["result"] != None:
-                    e.output = base64.b64decode(result_dict["result"])
-                else:
-                    e.output = b""
-                raise e
-            return base64.b64decode(result_dict["result"])
 
     @staticmethod
     def docker_machine_path(fail_if_not_found=True):
@@ -1990,7 +1998,7 @@ class Service(object):
         try:
             env = os.environ.copy()
             env["COLUMNS"] = "200"
-            output = SystemInfo.check_output_with_isolated_pty([
+            output = SubprocessHelpers.check_output_with_isolated_pty([
                 SystemInfo.docker_compose_path(), "ps"],
                 cwd=self.service_path, stderr=subprocess.STDOUT,
                 timeout=10, env=env).\
