@@ -263,7 +263,7 @@ class SubprocessHelper(object):
             def run(self):
                 while True:
                     try:
-                        c = fileobj.read(1)
+                        c = self.fileobj.read(1)
                         if self.copy_to != None:
                             self.copy_to.write(c)
                         self.complete_output += c
