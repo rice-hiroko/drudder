@@ -603,7 +603,7 @@ class Installer(object):
                         distribution = distribution[1:-1]
                 elif _line.startswith("VERSION=") and _line.find("(") > 0:
                     distribution_codename = ((_line.partition("=")[2]).\
-                        partition("(")[2]).partition("(")[0].lower()
+                        partition("(")[2]).partition(")")[0].lower()
                 elif _line.startswith("VERSION_ID="):
                     extract = line.partition("=")[2]
                     if extract.startswith("\"") and \
