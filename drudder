@@ -267,7 +267,7 @@ class SubprocessHelper(object):
 
                         # Make sure it is bytes:
                         try:
-                            c = c.decode("utf-8", "replace")
+                            c = c.encode("utf-8", "replace")
                         except AttributeError:
                             pass
 
@@ -306,7 +306,7 @@ class SubprocessHelper(object):
                 copy_to = sys.stderr
             if stderr == subprocess.STDOUT:
                 stderr_reader = OutputReader(process, process.stderr, writer,
-                    copy_to=copy_to)
+                    copy_to=sys.stdout)
             else:
                 stderr_reader = OutputReader(process, process.stderr, None,
                     copy_to=copy_to)
