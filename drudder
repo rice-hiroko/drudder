@@ -339,6 +339,14 @@ class SubprocessHelper(object):
         process.wait()
         time.sleep(1)
         try:
+            process.stdout.close()
+        except Exception:
+            pass
+        try:
+            process.stderr.close()
+        except Exception:
+            pass
+        try:
             process.kill()
         except Exception:
             pass
