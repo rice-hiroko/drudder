@@ -300,7 +300,7 @@ class SubprocessHelper(object):
         stdout_reader = None
         stderr_reader = None
         presented_output_store = {
-            "data" : b""
+            "data" : b"",
             "user_write_error" : None,
         }
         def writer(data):
