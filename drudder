@@ -679,7 +679,18 @@ class Installer(object):
                 sys.exit(1)
 
             # Install docker-engine package:
-            exit_code = subprocess.call(["apt-get", "update"])
+            # E: The method driver /usr/lib/apt/methods/https could not be found.
+            class StdoutWriter(object):
+                def __init__(self):
+                    self.complete_output = ""
+
+                def write(self, data):
+                    self.complete_output += data
+            writer = StdoutWriter()
+
+            exit_code = subprocess.call(["apt-get", "update"],
+                stdout=writer, stderr=writer)
+            print("ENTIRE OUTPUT: " + str(writer.complete_output))
             if exit_code != 0:
                 raise RuntimeError("command failed: " +\
                     "apt-get update")
