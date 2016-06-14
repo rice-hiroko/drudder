@@ -267,6 +267,8 @@ class SubprocessHelper(object):
                 self.copy_to = copy_to
 
             def run(self):
+                if self.fileobj == None:
+                    return
                 while True:
                     try:
                         c = self.fileobj.read(1)
