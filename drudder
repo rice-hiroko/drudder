@@ -874,6 +874,9 @@ class Installer(object):
                 "at " + str(BUG_URL), file=sys.stderr)
             sys.exit(1)
 
+        print("drudder: info: [Installer/docker] " +\
+            "detected distribution: " + str(distribution))
+
         # Debian/Ubuntu docker install:
         if distribution == "ubuntu" or distribution == "debian":
             if distribution_codename == None:
@@ -884,8 +887,8 @@ class Installer(object):
                     file=sys.stderr)
                 sys.exit(1)
             try:
-                print("[Installer/docker] Importing docker-engine " +\
-                    "repository key...")
+                print("drudder: info: [Installer/docker] " +\
+                    "Importing docker-engine repository key...")
                 subprocess.check_output(["apt-key", "adv", "--keyserver",
                     "hkp://p80.pool.sks-keyservers.net:80", "--recv-keys",
                     "58118E89F3A912897C070ADBF76221572C52609D"])
@@ -898,8 +901,8 @@ class Installer(object):
                 print("If you think this is a bug, please file a ticket "+\
                     "at " + str(BUG_URL), file=sys.stderr)
                 sys.exit(1)
-            print("[Installer/docker] Adding docker-engine repository to " +\
-                "apt sources...")
+            print("drudder: info: [Installer/docker] Adding " +\
+                "docker-engine repository to apt sources...")
             sources_lst_file = os.path.join("/etc", "apt", "sources.list.d",
                 "docker.list")
             if os.path.exists(sources_lst_file):
@@ -924,7 +927,8 @@ class Installer(object):
 
             # Refresh package index with new repository added:
             while True:
-                print("[Installer/docker] Running: apt-get update")
+                print("drudder: info: [Installer/docker] " +\
+                    "Running: apt-get update")
                 try:
                     SubprocessHelper.check_output_with_stdout_copy(
                         ["apt-get", "update"],
@@ -950,11 +954,13 @@ class Installer(object):
                     raise RuntimeError("aborting - missing install media")
 
             # Install docker-engine package:
-            print("[Installer/docker] Running: " +\
+            print("drudder: info: [Installer/docker] Running: " +\
                 "apt-get install -y docker-engine")
             attempts = 0
             while attempts < 2:
                 try:
+                    print("drudder: info: [Installer/docker] running: " +\
+                        "apt-get install -y docker-engine")
                     SubprocessHelper.check_output_with_stdout_copy(
                         ["apt-get", "install", "-y", "docker-engine"],
                         stderr=subprocess.STDOUT, pty=True,
@@ -963,7 +969,13 @@ class Installer(object):
                     # Try to repair terminal after aborting previous command:
                     time.sleep(1)
                     subprocess.call(["reset"], shell=True)
+                    time.sleep(1)
+                    print("drudder: info: resetting terminal after " +\
+                        "previous command was aborted")
 
+                    print("drudder: warning: missing install media " +\
+                        "reference detected. Running: " +\
+                        "apt-get update --fix-missing", file=sys.stderr)
                     # Media change error occured. Fix repositories:
                     SubprocessHelper.check_output_with_stdout_copy(
                         ["apt-get", "update", "--fix-missing"],
@@ -977,6 +989,9 @@ class Installer(object):
         elif distribution == "fedora":
             sources_lst_file = os.path.join("/etc", "yum.repos.d",
                 "docker.repo")
+            print("drudder: info: [Installer/docker] writing " +\
+                "repository info to " +\
+                str(sources_lst_file))
             if os.path.exists(sources_lst_file):
                 try:
                     os.remove(sources_lst_file)
@@ -1004,7 +1019,8 @@ class Installer(object):
                 sys.exit(1)
 
             # Install docker-engine package:
-            print("Invoking system update...")
+            print("drudder: info: [Installer/docker] Running: " +\
+                "dnf install -y docker-engine")
             SubprocessHelper.check_output_with_stdout_copy([
                 "dnf", "install", \
                 "-y", "docker-engine"], stderr=subprocess.STDOUT)
