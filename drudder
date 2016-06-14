@@ -253,39 +253,63 @@ class SubprocessHelper(object):
 
         # Output reader thread definition:
         class OutputReader(threading.Thread):
-            def __init__(self, process, fileobj, copy_to=None):
+            def __init__(self, process, fileobj, writer, copy_to=None):
                 super().__init__()
                 self.process = process
                 self.fileobj = fileobj
-                self.complete_output = ""
+                self.writer_func = writer
                 self.copy_to = copy_to
 
             def run(self):
                 while True:
                     try:
                         c = self.fileobj.read(1)
+
+                        # Make sure it is bytes:
+                        try:
+                            c = c.decode("utf-8", "replace")
+                        except AttributeError:
+                            pass
+
+                        # Write to copy file handle if present:
                         if self.copy_to != None:
-                            self.copy_to.write(c)
-                        self.complete_output += c
+                            try:
+                                self.copy_to.write(c)
+                            except TypeError:
+                                self.copy_to.write(c.decode(
+                                    "utf-8", "replace"))
+
+                        # Process writer func:
+                        if self.writer_func != None:
+                        self.writer_func(c)
                     except OSError:
                         break
 
-        # Launch output readers as required:
+        # Launch output readers as required and collect data:
         stdout_reader = None
         stderr_reader = None
-        if actual_stdout == subprocess.PIPE:
+        presented_output_store = {
+            "data" : b""
+        }
+        def writer(data):
+            presented_output_store["data"] += data
+        if actual_stdout == subprocess.PIPE:  # we need to collect stdout.
             copy_to = stdout
             if stdout == None or stdout == subprocess.PIPE:
                 copy_to = sys.stdout
-            stdout_reader = OutputReader(process, process.stdout,
+            stdout_reader = OutputReader(process, process.stdout, writer,
                 copy_to=copy_to)
             stdout_reader.start()
-        if actual_stderr == subprocess.PIPE:
+        if actual_stderr == subprocess.PIPE:  # we need to collect stderr.
             copy_to = stderr
             if stderr == None or stderr == subprocess.PIPE:
                 copy_to = sys.stderr
-            stderr_reader = OutputReader(process, process.stderr,
-                copy_to=copy_to)
+            if stderr == subprocess.STDOUT:
+                stderr_reader = OutputReader(process, process.stderr, writer,
+                    copy_to=copy_to)
+            else:
+                stderr_reader = OutputReader(process, process.stderr, None,
+                    copy_to=copy_to)
             stderr_reader.start()
 
         # Wait for process to end:
@@ -304,8 +328,9 @@ class SubprocessHelper(object):
             if stdout_reader != None:
                 new_error.output = stdout_reader.complete_output
             raise new_error
-        if stdout_reader != None:
-            return stdout_reader.complete_output
+        if stdout_reader != None or (stderr_reader != None and \
+                stderr = subprocess.STDOUT):
+            return presented_output_store["data"]
         return None
 
     @staticmethod
@@ -858,20 +883,23 @@ class Installer(object):
             try:
                 SubprocessHelper.check_output_with_stdout_copy(
                     ["apt-get", "update"],
-                    stdout=sys.stderr)
+                    stderr=subprocess.STDOUT)
             except subprocess.CalledProcessError as e:
                 if e.output.find("E: The method driver " +\
                         "/usr/lib/apt/methods/https could not be found") >= 0:
                     SubprocessHelper.check_output_with_stdout_copy(
-                        ["apt-get", "install", "apt-transport-https"])
+                        ["apt-get", "install", "apt-transport-https"],
+                        stderr=subprocess.STDOUT)
                     SubprocessHelper.check_output_with_stdout_copy(
-                        ["apt-get", "update"])
+                        ["apt-get", "update"],
+                        stderr=subprocess.STDOUT)
                 else:
                     raise e
 
             # Install docker-engine package:
             SubprocessHelper.check_output_with_stdout_copy(
-                ["apt-get", "install", "-y", "docker-engine"])
+                ["apt-get", "install", "-y", "docker-engine"],
+                stderr=subprocess.STDOUT)
             return
         # Fedora docker install:
         elif distribution == "fedora":
