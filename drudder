@@ -671,7 +671,7 @@ class Installer(object):
 
         if explicit_install:
             print("All tools installed.", file=sys.stderr)
-            sys.exit(0)
+            os._exit(0)
 
     @staticmethod
     def install_yaml():
