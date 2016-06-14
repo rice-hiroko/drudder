@@ -82,7 +82,7 @@ These are rare special commands you might need for the occasional special
 maintenance.
 
 ```
-  drudder tools-install       - install and update all required tools for
+  drudder install-tools       - install and update all required tools for
                                 running drudder on this computer
   drudder clean               - deletes all containers that aren't running
 								and all dangling volumes

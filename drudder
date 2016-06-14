@@ -103,7 +103,7 @@ freely, subject to the following restrictions:
     maintenance.
 
     ```
-      drudder tools-install       - install and update all required tools for
+      drudder install-tools       - install and update all required tools for
                                     running drudder on this computer
       drudder clean               - deletes all containers that aren't running
                                     and all dangling volumes
@@ -112,7 +112,7 @@ freely, subject to the following restrictions:
     # Installation
 
     Copy the drudder script to /usr/bin/ and set execution bit (chmod +x).
-    Then run: ```sudo drudder tools-install```
+    Then run: ```sudo drudder install-tools```
 
 
     # HOW TO add your service
@@ -409,11 +409,23 @@ class Installer(object):
         if not SystemInfo.docker_compose_path(fail_if_not_found=False):
             missing.append("docker-compose")
 
-        if len(missing) > 0: 
-            print("drudder: warning: missing components detected: " +\
-                ", ".join(missing) + ". Invoking installer...")
-            if SystemInfo.yesno("Do you want to install (system-wide): " +\
-                    ", ".join(missing), default_yes=False):
+        explicit_install = False
+        if len(sys.argv) >= 2:
+            if sys.argv[1].strip() == "install-tools":
+                explicit_install = True
+
+        if len(missing) > 0:
+            do_install = True
+            if not explicit_install:
+                print("drudder: warning: missing components detected: " +\
+                    ", ".join(missing) + ". Invoking installer...")
+                do_install = SystemInfo.yesno(
+                    "Do you want to install (system-wide): " +\
+                    ", ".join(missing), default_yes=False)
+            else:
+                print("Installing the following components: " +\
+                    ", ".join(missing))
+            if do_install:
                 for component in missing:
                     if component == "PyYAML":
                         Installer.install_yaml()
@@ -427,6 +439,10 @@ class Installer(object):
                 print("drudder: error: missing components: " +\
                     ", ".join(missing))
                 sys.exit(1)
+
+        if explicit_install:
+            print("All tools installed.", file=sys.stderr)
+            sys.exit(0)
 
     @staticmethod
     def install_yaml():
@@ -2305,6 +2321,9 @@ parser.add_argument("action",
                             Mainly useful if you want to process the combined
                             data computed by drudder with another tool
                             of yours.
+
+    "install-tools" : install all required components and tools to run drudder
+                      on this computer
     ''')
 
     )
@@ -3428,7 +3447,7 @@ def main():
         help=textwrap.dedent('''\
         Possible values:
 
-        "tools-install": install and upgrade all required tools like
+        "install-tools": install and upgrade all required tools like
                          docker-machine and docker-compose on the local
                          computer. This will automatically fetch and provide
                          anything to require drudder.
