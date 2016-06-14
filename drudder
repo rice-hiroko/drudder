@@ -693,7 +693,7 @@ class Installer(object):
             except Exception:
                 pass
             exit_code = process.returncode
-            print("ENTIRE OUTPUT: " + str(writer.complete_output))
+            print("ENTIRE OUTPUT: " + str(complete_output))
             if exit_code != 0:
                 raise RuntimeError("command failed: " +\
                     "apt-get update")
