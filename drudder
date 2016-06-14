@@ -229,14 +229,15 @@ import uuid
 
 class SubprocessHelper(object):
     @staticmethod
-    def check_output_with_stdout_copy(cmd, shell=False, stdout=None, stderr=None):
+    def check_output_with_stdout_copy(cmd, shell=False, stdout=None,
+            stderr=None):
         # Get actual stdout/stderr as to be used internally:
         actual_stdout = stdout
-        if stdout == None or stdout == subprocess.STDERR:
+        if stdout == None or stdout == sys.stderr:
             actual_stdout = subprocess.PIPE
         actual_stderr = stderr
         if stderr == None or stderr == subprocess.STDOUT or \
-                stderr == subprocess.STDERR:
+                stderr == sys.stderr:
             actual_stderr = subprocess.PIPE
 
         # Launch command:
@@ -245,16 +246,19 @@ class SubprocessHelper(object):
 
         # Output reader thread definition:
         class OutputReader(threading.Thread):
-            def __init__(self, process, fileobj):
+            def __init__(self, process, fileobj, copy_to=None):
                 super().__init__()
                 self.process = process
                 self.fileobj = fileobj
                 self.complete_output = ""
+                self.copy_to = copy_to
 
             def run(self):
                 while True:
                     try:
                         c = fileobj.read(1)
+                        if self.copy_to != None:
+                            self.copy_to.write(c)
                         self.complete_output += c
                     except OSError:
                         break
@@ -263,10 +267,18 @@ class SubprocessHelper(object):
         stdout_reader = None
         stderr_reader = None
         if actual_stdout == subprocess.PIPE:
-            stdout_reader = OutputReader(process, process.stdout)
+            copy_to = stdout
+            if stdout == None or stdout == subprocess.PIPE:
+                copy_to = sys.stdout
+            stdout_reader = OutputReader(process, process.stdout,
+                copy_to=copy_to)
             stdout_reader.start()
         if actual_stderr == subprocess.PIPE:
-            stderr_reader = OutputReader(process, process.stderr)
+            copy_to = stderr
+            if stderr == None or stderr == subprocess.PIPE:
+                copy_to = sys.stderr
+            stderr_reader = OutputReader(process, process.stderr,
+                copy_to=copy_to)
             stderr_reader.start()
 
         # Wait for process to end:
@@ -744,7 +756,7 @@ class Installer(object):
             try:
                 SubprocessHelper.check_output_with_stdout_copy(
                     ["apt-get", "update"],
-                    stdout=subprocess.STDERR)
+                    stdout=sys.stderr)
             except subprocess.CalledProcessError as e:
                 if e.output.find("E: The method driver " +\
                         "/usr/lib/apt/methods/https could not be found") >= 0:
