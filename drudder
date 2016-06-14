@@ -880,21 +880,23 @@ class Installer(object):
                 sys.exit(1)
 
             # Refresh package index with new repository added:
-            try:
-                SubprocessHelper.check_output_with_stdout_copy(
-                    ["apt-get", "update"],
-                    stderr=subprocess.STDOUT)
-            except subprocess.CalledProcessError as e:
-                if e.output.find(b"E: The method driver " +\
-                        b"/usr/lib/apt/methods/https could not be found") >= 0:
-                    SubprocessHelper.check_output_with_stdout_copy(
-                        ["apt-get", "install", "apt-transport-https"],
-                        stderr=subprocess.STDOUT)
+            while True:
+                try:
                     SubprocessHelper.check_output_with_stdout_copy(
                         ["apt-get", "update"],
                         stderr=subprocess.STDOUT)
-                else:
+                except subprocess.CalledProcessError as e:
+                    if e.output.find(b"E: The method driver " +\
+                            b"/usr/lib/apt/methods/https could not be found") >= 0:
+                        SubprocessHelper.check_output_with_stdout_copy(
+                            ["apt-get", "install", "-y", "apt-transport-https"],
+                            stderr=subprocess.STDOUT)
+                        continue
                     raise e
+                break
+            SubprocessHelper.check_output_with_stdout_copy(
+                ["apt-get", "update"],
+                stderr=subprocess.STDOUT)
 
             # Install docker-engine package:
             SubprocessHelper.check_output_with_stdout_copy(
@@ -933,11 +935,9 @@ class Installer(object):
 
             # Install docker-engine package:
             print("Invoking system update...")
-            exit_code = subprocess.call(["dnf", "install", \
-                "-y", "docker-engine"])
-            if exit_code != 0:
-                raise RuntimeError("command failed: " +\
-                    "dnf install -y docker-engine")
+            SubprocessHelper.check_output_with_stdout_copy([
+                "dnf", "install", \
+                "-y", "docker-engine"], stderr=subprocess.STDOUT)
             return
         # Others:
         else:
