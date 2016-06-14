@@ -227,6 +227,68 @@ import time
 import traceback
 import uuid
 
+class SubprocessHelper(object):
+    @staticmethod
+    def check_output_with_stdout_copy(cmd, shell=False, stdout=None, stderr=None):
+        # Get actual stdout/stderr as to be used internally:
+        actual_stdout = stdout
+        if stdout == None or stdout == subprocess.STDERR:
+            actual_stdout = subprocess.PIPE
+        actual_stderr = stderr
+        if stderr == None or stderr == subprocess.STDOUT or \
+                stderr == subprocess.STDERR:
+            actual_stderr = subprocess.PIPE
+
+        # Launch command:
+        process = subprocess.Popen(cmd, shell=shell,
+            stdout=actual_stdout, stderr=actual_stderr)
+
+        # Output reader thread definition:
+        class OutputReader(threading.Thread):
+            def __init__(self, process, fileobj):
+                super().__init__()
+                self.process = process
+                self.fileobj = fileobj
+                self.complete_output = ""
+
+            def run(self):
+                while True:
+                    try:
+                        c = fileobj.read(1)
+                        self.complete_output += c
+                    except OSError:
+                        break
+
+        # Launch output readers as required:
+        stdout_reader = None
+        stderr_reader = None
+        if actual_stdout == subprocess.PIPE:
+            stdout_reader = OutputReader(process, process.stdout)
+            stdout_reader.start()
+        if actual_stderr == subprocess.PIPE:
+            stderr_reader = OutputReader(process, process.stderr)
+            stderr_reader.start()
+
+        # Wait for process to end:
+        process.wait()
+        time.sleep(1)
+        try:
+            process.kill()
+        except Exception:
+            pass
+
+        # Evaluate whether it ran successfully:
+        exit_code = process.returncode
+        if exit_code != 0:
+            new_error = subprocess.CalledProcessError(
+                cmd=cmd, returncode=exit_code)
+            if stdout_reader != None:
+                new_error.output = stdout_reader.complete_output
+            raise new_error
+        if stdout_reader != None:
+            return stdout_reader.complete_output
+        return None
+
 class YAMLInstallInfo(object):
     @staticmethod
     def test_for_yaml():
@@ -678,30 +740,24 @@ class Installer(object):
                     "privileges", file=sys.stderr)
                 sys.exit(1)
 
-            # Install docker-engine package:
-            # E: The method driver /usr/lib/apt/methods/https could not be found.
-            process = subprocess.Popen(["apt-get", "update"])
-            while True:
-                complete_output = ""
-                try:
-                    c = process.stdout.read(1)
-                    complete_output += c
-                except OSError:
-                    break
+            # Refresh package index with new repository added:
             try:
-                process.wait()
-            except Exception:
-                pass
-            exit_code = process.returncode
-            print("ENTIRE OUTPUT: " + str(complete_output))
-            if exit_code != 0:
-                raise RuntimeError("command failed: " +\
-                    "apt-get update")
-            exit_code = subprocess.call(["apt-get", "install", "-y",
-                "docker-engine"])
-            if exit_code != 0:
-                raise RuntimeError("command failed: " +\
-                    "apt-get install -y docker-engine")
+                SubprocessHelper.check_output_with_stdout_copy(
+                    ["apt-get", "update"],
+                    stdout=subprocess.STDERR)
+            except subprocess.CalledProcessError as e:
+                if e.output.find("E: The method driver " +\
+                        "/usr/lib/apt/methods/https could not be found") >= 0:
+                    SubprocessHelper.check_output_with_stdout_copy(
+                        ["apt-get", "install", "apt-transport-https"])
+                    SubprocessHelper.check_output_with_stdout_copy(
+                        ["apt-get", "update"])
+                else:
+                    raise e
+
+            # Install docker-engine package:
+            SubprocessHelper.check_output_with_stdout_copy(
+                ["apt-get", "install", "-y", "docker-engine"])
             return
         # Fedora docker install:
         elif distribution == "fedora":
