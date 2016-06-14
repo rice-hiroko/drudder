@@ -845,6 +845,8 @@ class Installer(object):
                     file=sys.stderr)
                 sys.exit(1)
             try:
+                print("[Installer/docker] Importing docker-engine " +\
+                    "repository key...")
                 subprocess.check_output(["apt-key", "adv", "--keyserver",
                     "hkp://p80.pool.sks-keyservers.net:80", "--recv-keys",
                     "58118E89F3A912897C070ADBF76221572C52609D"])
@@ -857,6 +859,8 @@ class Installer(object):
                 print("If you think this is a bug, please file a ticket "+\
                     "at " + str(BUGS_URL), file=sys.stderr)
                 sys.exit(1)
+            print("[Installer/docker] Adding docker-engine repository to " +\
+                "apt sources...")
             sources_lst_file = os.path.join("/etc", "apt", "sources.list.d",
                 "docker.list")
             if os.path.exists(sources_lst_file):
@@ -881,6 +885,7 @@ class Installer(object):
 
             # Refresh package index with new repository added:
             while True:
+                print("[Installer/docker] Running: apt-get update")
                 try:
                     SubprocessHelper.check_output_with_stdout_copy(
                         ["apt-get", "update"],
@@ -888,17 +893,18 @@ class Installer(object):
                 except subprocess.CalledProcessError as e:
                     if e.output.find(b"E: The method driver " +\
                             b"/usr/lib/apt/methods/https could not be found") >= 0:
+                        print("[Installer/docker] Running: " +\
+                            "apt-get install -y docker-engine")
                         SubprocessHelper.check_output_with_stdout_copy(
                             ["apt-get", "install", "-y", "apt-transport-https"],
                             stderr=subprocess.STDOUT)
                         continue
                     raise e
                 break
-            SubprocessHelper.check_output_with_stdout_copy(
-                ["apt-get", "update"],
-                stderr=subprocess.STDOUT)
 
             # Install docker-engine package:
+            print("[Installer/docker] Running: " +\
+                "apt-get install -y docker-engine")
             SubprocessHelper.check_output_with_stdout_copy(
                 ["apt-get", "install", "-y", "docker-engine"],
                 stderr=subprocess.STDOUT)
