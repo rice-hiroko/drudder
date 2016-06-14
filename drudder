@@ -680,20 +680,23 @@ class Installer(object):
 
             # Install docker-engine package:
             # E: The method driver /usr/lib/apt/methods/https could not be found.
-            class StdoutWriter(object):
-                def __init__(self):
-                    self.complete_output = ""
-
-                def write(self, data):
-                    self.complete_output += data
-            writer = StdoutWriter()
-
-            exit_code = subprocess.call(["apt-get", "update"],
-                stdout=writer, stderr=writer)
+            process = subprocess.Popen(["apt-get", "update"])
+            while True:
+                complete_output = ""
+                try:
+                    c = process.stdout.read(1)
+                    complete_output += c
+                except OSError:
+                    break
+            try:
+                process.wait()
+            except Exception:
+                pass
+            exit_code = process.returncode
             print("ENTIRE OUTPUT: " + str(writer.complete_output))
-            if exit_code != 0:
-                raise RuntimeError("command failed: " +\
-                    "apt-get update")
+            #if exit_code != 0:
+            #    raise RuntimeError("command failed: " +\
+            #        "apt-get update")
             exit_code = subprocess.call(["apt-get", "install", "-y",
                 "docker-engine"])
             if exit_code != 0:
