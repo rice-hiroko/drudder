@@ -586,6 +586,33 @@ class Installer(object):
                     distribution_codename = _line.partition("=")[2].lower()
                 elif _line.startswith("DISTRIB_RELEASE"):
                     distribution_version = _line.partition("=")[2]
+        elif os.path.exists("/etc/os-release"):
+            with open("/etc/lsb-release") as f:
+                contents = f.read()
+            try:
+                contents = contents.decode("utf-8", "replace")
+            except AttributeError:
+                pass
+            contents = contents.replace("\r\n", "\n").replace("\r", "\n")
+            for line in contents.split("\n"):
+                _line = line.strip()
+                if _line.startswith("ID="):
+                    distribution = _line.partition("=")[2].lower()
+                    if distribution.startswith("\"") and \
+                            distribution.endswith("\""):
+                        distribution = distribution[1:-1]
+                elif _line.startswith("VERSION=") and _line.find("(") > 0:
+                    distribution_codename = ((_line.partition("=")[2]).\
+                        partition("(")[2]).partition("(")[0].lower()
+                elif _line.startswith("VERSION_ID="):
+                    extract = line.partition("=")[2]
+                    if extract.startswith("\"") and \
+                            extract.endswith("\""):
+                        extract = extract[1:-1]
+                    try:
+                        distribution_version = int(extract)
+                    except (TypeError, ValueError):
+                        pass
         if distribution == None and os.path.exists("/etc/redhat-release"):
             with open("/etc/redhat-release") as f:
                 contents = f.read()
