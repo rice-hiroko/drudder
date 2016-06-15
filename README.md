@@ -92,7 +92,7 @@ maintenance.
 # Installation
 
 Copy the drudder script to /usr/bin/ and set execution bit (chmod +x)
-Then run: ```sudo drudder tools-install```
+Then run: ```sudo drudder install-tools```
 
 
 # HOW TO add your service
