@@ -44,18 +44,26 @@ freely, subject to the following restrictions:
     - easily start/stop and manage multiple docker-compose controlled
       services in one go
 
-    - clean up all stopped containers and dangling volumes
-
     - creation of atomic snapshots of all your read-write volumes/live data
       without shutting down or pausing your containers (for backup purposes)
+
+    - clean up all stopped containers and dangling volumes with one command
 
     - one self-contained file
 
 
 
-    # Basic usage
+    # Usage
 
-    Usage:
+
+    ## Basics
+
+    These are the basic required commands for a simple single machine setup
+    where all your services are located on the local filesystem inside
+    the folder ```/srv/```.
+    (see the section ```HOW TO add your service``` for details on how those
+    services need to be set up)
+
 
     ```
       drudder list                - list all known services
@@ -84,19 +92,27 @@ freely, subject to the following restrictions:
       drudder snapshot <service>  - makes a snapshot of the live data if
                                     enabled. (optional) This feature requires
                                     btrfs
-      drudder clean               - deletes all containers that aren't running
-                                    and all dangling volumes
     ```
-
     **Hint**: You can always use "all" as service target if you want to apply
     an action to all services on your machine.
 
 
+    ## Maintenance
+
+    These are rare special commands you might need for the occasional special
+    maintenance.
+
+    ```
+      drudder install-tools       - install and update all required tools for
+                                    running drudder on this computer
+      drudder clean               - deletes all containers that aren't running
+                                    and all dangling volumes
+    ```
 
     # Installation
 
-    Copy the drudder script to /usr/bin/ and set execution bit (chmod +x)
-
+    Copy the drudder script to /usr/bin/ and set execution bit (chmod +x).
+    Then run: ```sudo drudder install-tools```
 
 
     # HOW TO add your service
@@ -119,7 +135,6 @@ freely, subject to the following restrictions:
 
     Congratulations, you can now manage launch your service(s) with
     drudder!
-
 
 
     # HOW TO backup
@@ -187,6 +202,7 @@ freely, subject to the following restrictions:
 """
 
 TOOL_VERSION="0.1"
+BUG_URL="https://github.com/JonasT/drudder"
 
 import argparse
 from argparse import RawTextHelpFormatter, HelpFormatter
@@ -203,6 +219,7 @@ import queue
 import subprocess
 import random
 import re
+import shlex
 import shutil
 import sys
 import textwrap
@@ -211,43 +228,149 @@ import time
 import traceback
 import uuid
 
-# Only import this on Unix systems:
-if platform.system().lower() != "windows":
-    import stat
-
-yaml_available = False
-try:
-    import yaml
-    yaml_available = True
-except ImportError:
-    yaml_available = False
-    pass
-
-class SystemInfo(object):
-    """ This class provides system info of various sorts about the installed
-        docker versions, btrfs and more.
-    """
-    __cached_docker_path = None
-
+class SubprocessHelper(object):
     @staticmethod
-    def locate_binary(name):
-        """ Locate a binary of some name in the common system-wide places
-            and return the full path, or return None if it can't be found.
-        """
-        badchars = '\'"$<> %|&():*/\\{}#!?=\n\r\t[]\033'
-        for char in badchars:
-            if name.find(char) >= 0:
-                raise ValueError("dangerous character in binary name")
-        output = None
+    def check_output_with_stdout_copy(cmd, shell=False, stdout=None,
+            stderr=None, cwd=None, env=None, pty=False, write_function=None):
+        # Get actual stdout/stderr as to be used internally:
+        actual_stdout = stdout
+        if stdout == None or stdout == sys.stderr:
+            actual_stdout = subprocess.PIPE
+        actual_stderr = stderr
+        if stderr == None or stderr == subprocess.STDOUT or \
+                stderr == sys.stderr:
+            actual_stderr = subprocess.PIPE
+
+        # Handle various other parameters:
+        if cwd == None:
+            cwd = os.getcwd()
+        if env == None:
+            env = os.environ.copy()
+
+        # Launch command:
+        if not pty:
+            process = subprocess.Popen(cmd, shell=shell,
+                stdout=actual_stdout, stderr=actual_stderr,
+                cwd=cwd, env=env)
+        else:
+            process = subprocess.Popen([sys.executable,
+                "-c", "import pty; import sys; " +\
+                "pty.spawn(sys.argv[1:])"] + cmd,
+                shell=shell,
+                stdout=actual_stdout, stderr=actual_stderr,
+                cwd=cwd, env=env)
+
+        # Output reader thread definition:
+        class OutputReader(threading.Thread):
+            def __init__(self, process, fileobj, writer, copy_to=None):
+                super().__init__()
+                self.process = process
+                self.fileobj = fileobj
+                self.writer_func = writer
+                self.copy_to = copy_to
+
+            def run(self):
+                if self.fileobj == None:
+                    return
+                while True:
+                    try:
+                        try:
+                            c = self.fileobj.read(1)
+                        except ValueError:
+                            raise OSError("file object invalid")
+
+                        # Make sure it is bytes:
+                        try:
+                            c = c.encode("utf-8", "replace")
+                        except AttributeError:
+                            pass
+
+                        # Write to copy file handle if present:
+                        if self.copy_to != None:
+                            try:
+                                self.copy_to.write(c)
+                            except TypeError:
+                                self.copy_to.write(c.decode(
+                                    "utf-8", "replace"))
+
+                        # Process writer func:
+                        if self.writer_func != None:
+                            self.writer_func(c)
+                    except OSError:
+                        break
+
+        # Launch output readers as required and collect data:
+        stdout_reader = None
+        stderr_reader = None
+        presented_output_store = {
+            "data" : b"",
+            "user_write_error" : None,
+        }
+        def writer(data):
+            if len(data) == 0:
+                return
+            try:
+                if write_function != None:
+                    write_function(data)
+            except Exception as e:
+                presented_output_store["user_write_error"] = str(e)
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+            presented_output_store["data"] += data
+        if actual_stdout == subprocess.PIPE:  # we need to collect stdout.
+            copy_to = stdout
+            if stdout == None or stdout == subprocess.PIPE:
+                copy_to = sys.stdout
+            stdout_reader = OutputReader(process, process.stdout, writer,
+                copy_to=copy_to)
+            stdout_reader.start()
+        if actual_stderr == subprocess.PIPE:  # we need to collect stderr.
+            copy_to = stderr
+            if stderr == None or stderr == subprocess.PIPE:
+                copy_to = sys.stderr
+            if stderr == subprocess.STDOUT:
+                stderr_reader = OutputReader(process, process.stderr, writer,
+                    copy_to=sys.stdout)
+            else:
+                stderr_reader = OutputReader(process, process.stderr, None,
+                    copy_to=copy_to)
+            stderr_reader.start()
+
+        # Wait for process to end:
+        process.wait()
+        time.sleep(1)
         try:
-            output = subprocess.check_output("which " + name, shell=True,
-                stderr=subprocess.STDOUT).\
-                decode("utf-8", "ignore").strip()
-        except subprocess.CalledProcessError:
+            process.stdout.close()
+        except Exception:
             pass
-        if output == None or len(output) == 0:
-            return None
-        return output
+        try:
+            process.stderr.close()
+        except Exception:
+            pass
+        try:
+            process.kill()
+        except Exception:
+            pass
+
+        # Evaluate whether it ran successfully:
+        exit_code = process.returncode
+        got_data = None
+        if presented_output_store["user_write_error"] != None:
+            raise RuntimeError("specified write_function " +\
+                "encountered an error: " +\
+                str(presented_output_store["user_write_error"]))
+        if stdout_reader != None or (stderr_reader != None and \
+                stderr == subprocess.STDOUT):
+            got_data = presented_output_store["data"]
+        if exit_code != 0:
+            new_error = subprocess.CalledProcessError(
+                cmd=cmd, returncode=exit_code)
+            new_error.output = got_data
+            raise new_error
+
+        return got_data
 
     @staticmethod
     def check_output_with_isolated_pty(cmd, shell=False, cwd=None,
@@ -344,8 +467,629 @@ class SystemInfo(object):
                 raise e
             return base64.b64decode(result_dict["result"])
 
+
+class YAMLInstallInfo(object):
     @staticmethod
-    def docker_path():
+    def test_for_yaml():
+        try:
+            import yaml
+            return True
+        except ImportError:
+            path = YAMLInstallInfo.custom_yaml_install_path()
+            if path != None:
+                return True
+        return False
+
+    @staticmethod
+    def custom_yaml_install_path_parent():
+        if platform.system().lower() == "windows":
+            return os.path.join(os.environ['WINDIR'], "drudder-PyYAML")
+        else:
+            return os.path.join("/var", "lib", "drudder-PyYAML")
+
+    @staticmethod
+    def custom_yaml_install_path():
+        parent_folder = YAMLInstallInfo.custom_yaml_install_path_parent()
+        if not os.path.exists(parent_folder):
+            return None
+        for fname in os.listdir(parent_folder):
+            if fname.startswith("PyYAML-"):
+                full_path = os.path.join(parent_folder, fname)
+                if os.path.isdir(full_path):
+                    return full_path
+        return None
+       
+
+class Installer(object):
+    @staticmethod
+    def latest_docker_machine_version():
+        import urllib.request
+        tag_url = "https://github.com/docker/machine/releases/latest/"
+        try:
+            target = urllib.request.urlopen(tag_url)
+            final_url = target.geturl()
+            try:
+                final_url = final_url.decode("utf-8")
+            except AttributeError:
+                pass
+            if final_url.endswith("/"):
+                final_url = final_url[:-1]
+            version_tag = final_url.rpartition("/")[2]
+        except Exception as e:
+            raise RuntimeError("failed to obtain docker-machine version tag")
+        return version_tag
+
+    @staticmethod
+    def latest_docker_compose_version():
+        import urllib.request
+        tag_url = "https://github.com/docker/compose/releases/latest/"
+        try:
+            target = urllib.request.urlopen(tag_url)
+            final_url = target.geturl()
+            try:
+                final_url = final_url.decode("utf-8")
+            except AttributeError:
+                pass
+            if final_url.endswith("/"):
+                final_url = final_url[:-1]
+            version_tag = final_url.rpartition("/")[2]
+        except Exception as e:
+            raise RuntimeError("failed to obtain docker-compose version tag")
+        return version_tag
+
+    @staticmethod
+    def install_docker_machine():
+        return Installer.install_docker_tool(
+            tool_name="docker-machine")
+
+    @staticmethod
+    def install_docker_compose():
+        return Installer.install_docker_tool(
+            tool_name="docker-compose")
+
+    @staticmethod
+    def install_docker_tool(tool_name=None):
+        if tool_name == None:
+            raise ValueError(
+                "provide the name of the tool to be installed!")
+
+        # Getting various helper functions:
+        if tool_name == "docker-machine":
+            path_func = SystemInfo.docker_machine_path
+            version_func = Installer.latest_docker_machine_version
+            short_name = "machine"
+        elif tool_name == "docker-compose":
+            path_func = SystemInfo.docker_compose_path
+            version_func = Installer.latest_docker_compose_version
+            short_name = "compose"
+        else:
+            raise ValueError("unsupported docker tool: " + tool_name)
+
+        # Check if the given tool is already installed:
+        if path_func(fail_if_not_found=False) != None:
+            # Already installed, nothing to do.
+            return
+
+        # Follow the "latest" URL to the actual latest tag:
+        try:
+            version_tag = version_func()
+        except RuntimeError:
+            print("drudder: error: failed to obtain " + tool_name +\
+                "version tag",
+                file=sys.stderr)
+            print("Please check your internet connectivity.",
+                file=sys.stderr)
+            sys.exit(1)
+
+        import urllib.request
+        
+        # Put together the download URL:
+        # Reference URL:
+        # https://github.com/docker/machine/releases/download/
+        #   v0.7.0/docker-machine-`uname -s`-`uname -m`
+        if platform.system().lower() == "windows":
+            url = "https://github.com/docker/" + short_name +\
+                "/releases/" +\
+                "download/" + str(version_tag) + "/docker-" +\
+                short_name + "-" +\
+                "Windows-x86_64.exe"
+        else:
+            url = "https://github.com/docker/" +\
+                short_name + "/releases/" +\
+                "download/" + str(version_tag) + "/docker-" +\
+                short_name + "-" +\
+                subprocess.check_output(["uname", "-s"]).\
+                    decode("utf-8").strip() + "-" +\
+                subprocess.check_output(["uname", "-m"]).\
+                    decode("utf-8").strip()
+
+        # Download docker-machine binary:
+        print("Downloading " + tool_name + "... (this might take " +\
+                "a while)")
+        try:
+            local_filename, headers = urllib.request.urlretrieve(
+                url)
+        except Exception as e:
+            print("drudder: error: failed to obtain " + str(url),
+                file=sys.stderr)
+            print("Please check your internet connectivity.",
+                file=sys.stderr)
+            sys.exit(1)
+
+        # Put binary into place for use:
+        if platform.system().lower() == "windows":
+            docker_tool_target = os.path.join(os.environ['WINDIR'],
+                "system32", tool_name + ".exe")
+        else:
+            docker_tool_target = os.path.join("/usr", "local", "bin",
+                tool_name)
+        try:
+            shutil.copy(local_filename, docker_tool_target)
+        except Exception as e:
+            print("drudder: error: failed to create path: " +\
+                str(docker_tool_target), file=sys.stderr)
+            print("Please re-run this with sudo / administrator " +\
+                "privileges.", file=sys.stderr)
+            sys.exit(1)
+
+        # Set executable flag (+x):
+        import stat
+        os.chmod(docker_tool_target,
+            os.stat(docker_tool_target).st_mode
+            | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    @staticmethod
+    def check_and_install_missing():
+        missing = []
+        if not YAMLInstallInfo.test_for_yaml():
+            missing.append("PyYAML")
+        if not SystemInfo.docker_path(fail_if_not_found=False):
+            missing.append("docker")
+        if not SystemInfo.docker_machine_path(fail_if_not_found=False):
+            missing.append("docker-machine")
+        if not SystemInfo.docker_compose_path(fail_if_not_found=False):
+            missing.append("docker-compose")
+
+        explicit_install = False
+        if len(sys.argv) >= 2:
+            if sys.argv[1].strip() == "install-tools":
+                explicit_install = True
+
+        if len(missing) > 0:
+            do_install = True
+            if not explicit_install:
+                print("drudder: warning: missing components detected: " +\
+                    ", ".join(missing) + ". Invoking installer...")
+                do_install = SystemInfo.yesno(
+                    "Do you want to install (system-wide): " +\
+                    ", ".join(missing), default_yes=False)
+            else:
+                print("Installing the following components: " +\
+                    ", ".join(missing))
+            if do_install:
+                for component in missing:
+                    if component == "PyYAML":
+                        Installer.install_yaml()
+                    elif component == "docker-machine":
+                        Installer.install_docker_machine()
+                    elif component == "docker-compose":
+                        Installer.install_docker_compose()
+                    elif component == "docker":
+                        Installer.install_docker()
+            else:
+                print("drudder: error: missing components: " +\
+                    ", ".join(missing))
+                sys.exit(1)
+
+        if explicit_install:
+            print("All tools installed.", file=sys.stderr)
+            os._exit(0)
+
+    @staticmethod
+    def install_yaml():
+        if YAMLInstallInfo.test_for_yaml():
+            # YAML is available, nothing to do.
+            return
+
+        # Obtain PyPI page for download link:
+        import urllib.request
+        pyyaml_url = 'https://pypi.python.org/pypi/PyYAML'
+        try:
+            with urllib.request.urlopen(
+                    pyyaml_url) as response:
+                html = response.read()
+                try:
+                    html = html.decode("utf-8", "replace")
+                except AttributeError:
+                    pass
+        except Exception as e:
+            print("drudder: error: failed to obtain " + str(pyyaml_url),
+                file=sys.stderr)
+            print("Please check your internet connectivity.", file=sys.stderr)
+            sys.exit(1)
+        def extract_source_link():
+            _html = html
+            pos = 0
+            while True:
+                def extract_block_url_title(block):
+                    link_start = block.find("<a href=\"")
+                    if link_start < 0:
+                        return (None, None)
+                    link_start += len("<a href=\"")
+                    link_end = block[link_start:].find("\"")
+                    if link_end < 0:
+                        return (None, None)
+                    link_end += link_start
+                    text_block_start = block.find(">",
+                        block.find("<td ", link_end))
+                    if text_block_start < 0:
+                        return (None, None)
+                    text_block_end = block.find("<", text_block_start)
+                    if text_block_end < 0:
+                        return (None, None)
+                    link_target = block[link_start:link_end]
+                    block_title = block[text_block_start:text_block_end]
+                    return (link_target, block_title)
+                # Find next relevant block start:
+                next_block_start_1 = _html.find("<tr class=\"odd", pos)
+                next_block_start_2 = _html.find("<tr class=\"even", pos)
+                next_block_start = next_block_start_1
+                if next_block_start < 0 or (next_block_start_2 >= 0 and \
+                        next_block_start_2 < next_block_start):
+                    next_block_start = next_block_start_2
+                if next_block_start < 0:
+                    return None
+                # Get the end to the block:
+                next_block_end = _html[next_block_start:].find("</tr>")
+                if next_block_end <= 0:
+                    return None
+                next_block_end += next_block_start
+                # Analyze block for link
+                (url, title) = extract_block_url_title(_html[
+                    next_block_start:next_block_end])
+                if url != None and title.strip().lower().find("source") >= 0:
+                    return url.partition("#")[0]
+
+        # PyYAML source download link:
+        yaml_source_link = extract_source_link()
+        if yaml_source_link == None:
+            print("drudder: error: failed to obtain PyYAML download link. " +\
+                "Please check your internet connection, and if this " +\
+                "problem persists, file a bug at " +\
+                BUG_URL, file=sys.stderr)
+            sys.exit(1)
+        if not yaml_source_link.startswith("https://"):
+            print("drudder: error: PyYAML download link is bogus, " +\
+                "unexpected protocol: " + str(yaml_source_link))
+            print("Please file a bug at " +\
+                BUG_URL, file=sys.stderr)
+            sys.exit(1)
+
+        # Make sure the install base path exists:
+        parent_path = YAMLInstallInfo.custom_yaml_install_path_parent()
+        if not os.path.exists(parent_path):
+            try:
+                os.mkdir(parent_path) 
+            except OSError:
+                print("drudder: error: failed to create path: " +\
+                    str(parent_path), file=sys.stderr)
+                print("Please re-run this with sudo / administrator " +\
+                    "privileges.", file=sys.stderr)
+                sys.exit(1)
+
+        # Get source:
+        try:
+            print("Downloading PyYAML... (this might take " +\
+                "a while)")
+            local_filename, headers = urllib.request.urlretrieve(
+                yaml_source_link)
+            source_extract_path = os.path.join(
+                parent_path, "PyYaml.tar.gz")
+            shutil.copy(local_filename, source_extract_path)
+            os.remove(local_filename)
+        except Exception as e:
+            print("drudder: error: failed to obtain " + str(
+                yaml_source_link_url),
+                file=sys.stderr)
+            print("Please check your internet connectivity.", file=sys.stderr)
+            sys.exit(1)
+
+        # Extract PyYAML:
+        import tarfile
+        tar_file = tarfile.open(source_extract_path)
+        tar_file.extractall(parent_path)
+
+    @staticmethod
+    def install_docker():
+        # Check if already installed:
+        path_to_docker = SystemInfo.docker_path(fail_if_not_found=False)
+        if path_to_docker != None:
+            # Docker is already installed, nothing to do.
+            return
+
+        # Detect distribution:
+        distribution = None
+        distribution_codename = None
+        distribution_version = None
+        if os.path.exists("/etc/lsb-release"):
+            with open("/etc/lsb-release") as f:
+                contents = f.read()
+            try:
+                contents = contents.decode("utf-8", "replace")
+            except AttributeError:
+                pass
+            contents = contents.replace("\r\n", "\n").replace("\r", "\n")
+            for line in contents.split("\n"):
+                _line = line.strip()
+                if _line.startswith("DISTRIB_ID="):
+                    distribution = _line.partition("=")[2].lower()
+                elif _line.startswith("DISTRIB_CODENAME"):
+                    distribution_codename = _line.partition("=")[2].lower()
+                elif _line.startswith("DISTRIB_RELEASE"):
+                    distribution_version = _line.partition("=")[2]
+        elif os.path.exists("/etc/os-release"):
+            with open("/etc/os-release") as f:
+                contents = f.read()
+            try:
+                contents = contents.decode("utf-8", "replace")
+            except AttributeError:
+                pass
+            contents = contents.replace("\r\n", "\n").replace("\r", "\n")
+            for line in contents.split("\n"):
+                _line = line.strip()
+                if _line.startswith("ID="):
+                    distribution = _line.partition("=")[2].lower()
+                    if distribution.startswith("\"") and \
+                            distribution.endswith("\""):
+                        distribution = distribution[1:-1]
+                elif _line.startswith("VERSION=") and _line.find("(") > 0:
+                    distribution_codename = ((_line.partition("=")[2]).\
+                        partition("(")[2]).partition(")")[0].lower()
+                elif _line.startswith("VERSION_ID="):
+                    extract = line.partition("=")[2]
+                    if extract.startswith("\"") and \
+                            extract.endswith("\""):
+                        extract = extract[1:-1]
+                    try:
+                        distribution_version = int(extract)
+                    except (TypeError, ValueError):
+                        pass
+        if distribution == None and os.path.exists("/etc/redhat-release"):
+            with open("/etc/redhat-release") as f:
+                contents = f.read()
+            try:
+                contents = contents.decode("utf-8", "replace")
+            except AttributeError:
+                pass
+            contents = contents.strip()
+            if contents.startswith("Fedora release "):
+                distribution = "fedora"
+                distribution_version = contents[len("Fedora release "):].lstrip()
+                distribution_version = distribution_version.partition(" ")[0]
+        if distribution == None:
+            print("drudder: error: failed to obtain detect distribution. " +\
+                "This distribution is most likely not supported for " +\
+                "docker install.",
+                file=sys.stderr)
+            print("If you want to help change this, please file a ticket "+\
+                "at " + str(BUG_URL), file=sys.stderr)
+            sys.exit(1)
+
+        print("drudder: info: [Installer/docker] " +\
+            "detected distribution: " + str(distribution))
+
+        # Debian/Ubuntu docker install:
+        if distribution == "ubuntu" or distribution == "debian":
+            if distribution_codename == None:
+                print("drudder: error: failed to detect detailed " +\
+                    "distribution code name: " + distribution,
+                    file=sys.stderr)
+                print("Please report this problem at " + BUG_URL,
+                    file=sys.stderr)
+                sys.exit(1)
+            try:
+                print("drudder: info: [Installer/docker] " +\
+                    "Importing docker-engine repository key...")
+                subprocess.check_output(["apt-key", "adv", "--keyserver",
+                    "hkp://p80.pool.sks-keyservers.net:80", "--recv-keys",
+                    "58118E89F3A912897C070ADBF76221572C52609D"])
+            except subprocess.CalledProcessError:
+                print("drudder: error: distribution key import failed.",
+                    file=sys.stderr) 
+                print("Please re-run this with sudo / administrator " +\
+                    "privileges, and check your internet connectivity.",
+                    file=sys.stderr)
+                print("If you think this is a bug, please file a ticket "+\
+                    "at " + str(BUG_URL), file=sys.stderr)
+                sys.exit(1)
+            print("drudder: info: [Installer/docker] Adding " +\
+                "docker-engine repository to apt sources...")
+            sources_lst_file = os.path.join("/etc", "apt", "sources.list.d",
+                "docker.list")
+            if os.path.exists(sources_lst_file):
+                try:
+                    os.remove(sources_lst_file)
+                except OSError:
+                    print("drudder: error: failed to remove file: " +\
+                        str(sources_lst_file))
+                    print("Please re-run this with sudo / administrator " +\
+                        "privileges", file=sys.stderr)
+                    sys.exit(1)
+            try:
+                with open(sources_lst_file, "w") as f:
+                    f.write("deb https://apt.dockerproject.org/repo " +\
+                        distribution + "-" + distribution_codename + " main")
+            except OSError:
+                print("drudder: error: failed to create file: " +\
+                    str(sources_lst_file))
+                print("Please re-run this with sudo / administrator " +\
+                    "privileges", file=sys.stderr)
+                sys.exit(1)
+
+            # Refresh package index with new repository added:
+            while True:
+                print("drudder: info: [Installer/docker] " +\
+                    "Running: apt-get update")
+                try:
+                    SubprocessHelper.check_output_with_stdout_copy(
+                        ["apt-get", "update"],
+                        stderr=subprocess.STDOUT)
+                except subprocess.CalledProcessError as e:
+                    if e.output.find(b"E: The method driver " +\
+                            b"/usr/lib/apt/methods/https could not be found") >= 0:
+                        print("[Installer/docker] Running: " +\
+                            "apt-get install -y docker-engine")
+                        SubprocessHelper.check_output_with_stdout_copy(
+                            ["apt-get", "install", "-y", "apt-transport-https"],
+                            stderr=subprocess.STDOUT)
+                        continue
+                    raise e
+                break
+
+            # Helper function to find out missing media sources:
+            media_error = { "temp_output" : b"" }
+            def media_change_error_detection(data):
+                media_error["temp_output"] += data
+                if media_error["temp_output"].find(
+                        b"Media change: please insert the disc") >= 0:
+                    raise RuntimeError("aborting - missing install media")
+
+            # Install docker-engine package:
+            try:
+                print("drudder: info: [Installer/docker] running: " +\
+                    "apt-get install -y docker-engine")
+                media_error["temp_output"] = b""
+                SubprocessHelper.check_output_with_stdout_copy(
+                    ["apt-get", "install", "-y", "docker-engine"],
+                    stderr=subprocess.STDOUT, pty=True,
+                    write_function=media_change_error_detection)
+            except RuntimeError:
+                # Media change hang occured. Abort, and tell user:
+                time.sleep(0.5)
+                subprocess.call(["reset"]) # fix terminal
+                time.sleep(0.5)
+
+                # Tell user:
+                print("drudder: error: your apt sources depend on " +\
+                    "an install media that is not present. " +\
+                    "Please fix your apt sources, or provide the " +\
+                    "required install media (CD-ROM, ...).", file=sys.stderr)
+                print("This is usually a user error.", file=sys.stderr)
+                print("If you are certain this is a bug in " +\
+                    "drudder, please report it at " + str(BUG_URL),
+                    file=sys.stderr)
+                sys.exit(1)
+            return
+        # Fedora docker install:
+        elif distribution == "fedora":
+            sources_lst_file = os.path.join("/etc", "yum.repos.d",
+                "docker.repo")
+            print("drudder: info: [Installer/docker] writing " +\
+                "repository info to " +\
+                str(sources_lst_file))
+            if os.path.exists(sources_lst_file):
+                try:
+                    os.remove(sources_lst_file)
+                except OSError:
+                    print("drudder: error: failed to remove file: " +\
+                        str(sources_lst_file))
+                    print("Please re-run this with sudo / administrator " +\
+                        "privileges", file=sys.stderr)
+                    sys.exit(1)
+            try:
+                with open(sources_lst_file, "w") as f:
+                    f.write(textwrap.dedent("""\
+                    [dockerrepo]
+                    name=Docker Repository
+                    baseurl=https://yum.dockerproject.org/repo/main/fedora/$releasever/
+                    enabled=1
+                    gpgcheck=1
+                    gpgkey=https://yum.dockerproject.org/gpg
+                    """))
+            except OSError:
+                print("drudder: error: failed to create file: " +\
+                    str(sources_lst_file))
+                print("Please re-run this with sudo / administrator " +\
+                    "privileges", file=sys.stderr)
+                sys.exit(1)
+
+            # Install docker-engine package:
+            print("drudder: info: [Installer/docker] Running: " +\
+                "dnf install -y docker-engine")
+            SubprocessHelper.check_output_with_stdout_copy([
+                "dnf", "install", \
+                "-y", "docker-engine"], stderr=subprocess.STDOUT)
+            return
+        # Others:
+        else:
+            print("drudder: error: unsupported distribution: " + str(
+                distribution))
+            print("If you want to help change this, please file a ticket "+\
+                "at " + str(BUG_URL), file=sys.stderr)
+            sys.exit(1)
+
+
+# Only import this on Unix systems:
+if platform.system().lower() != "windows":
+    import stat
+
+class SystemInfo(object):
+    """ This class provides system info of various sorts about the installed
+        docker versions, btrfs and more.
+    """
+    __cached_docker_path = None
+    __cached_docker_machine_path = None
+
+    @staticmethod
+    def yesno(text, default_yes=False):
+        if not default_yes:
+            appendix = " [y/N]"
+        else:
+            appendix = " [Y/n]"
+        ask_text = text + appendix
+        result = input(ask_text).lower().strip()
+        if result == "y" or result == "yes":
+            return True
+        if result == "n" or result == "no":
+            return False
+        if default_yes:
+            return True
+        return False
+
+    @staticmethod
+    def locate_binary(name):
+        """ Locate a binary of some name in the common system-wide places
+            and return the full path, or return None if it can't be found.
+        """
+        badchars = '\'"$<> %|&():*/\\{}#!?=\n\r\t[]\033'
+        for char in badchars:
+            if name.find(char) >= 0:
+                raise ValueError("dangerous character in binary name")
+        output = None
+        try:
+            output = subprocess.check_output("which " + name, shell=True,
+                stderr=subprocess.STDOUT).\
+                decode("utf-8", "ignore").strip()
+        except subprocess.CalledProcessError:
+            pass
+        if output == None or len(output) == 0:
+            return None
+        return output
+
+    @staticmethod
+    def docker_machine_path(fail_if_not_found=True):
+        if SystemInfo.__cached_docker_machine_path != None:
+            return SystemInfo.__cached_docker_machine_path
+        path = SystemInfo.locate_binary("docker-machine")
+        if path != None:
+            return path
+        if fail_if_not_found is True:
+            print("drudder: error: no docker-machine found. Is it installed?")
+            sys.exit(1)
+        return None
+
+    @staticmethod
+    def docker_path(fail_if_not_found=True):
         """ Locate docker binary and return its path, or print an error
             and exit the program with sys.exit(1) if not available.
         """
@@ -370,8 +1114,10 @@ class SystemInfo(object):
                 continue
             if behaves_like_docker(bin_path):
                 return bin_path
-        print("drudder: error: no docker found. Is it installed?")
-        sys.exit(1)
+        if fail_if_not_found is True:
+            print("drudder: error: no docker found. Is it installed?")
+            sys.exit(1)
+        return None
     
     @staticmethod
     def is_btrfs_subvolume(path):
@@ -458,16 +1204,18 @@ class SystemInfo(object):
 
 
     @staticmethod
-    def docker_compose_path():
+    def docker_compose_path(fail_if_not_found=True):
         """ Locate docker-compose binary and return its path, or exit process
             with error if not available.
         """
         bin_path = SystemInfo.locate_binary("docker-compose")
         if bin_path != None:
             return bin_path
-        print("drudder: error: no docker-compose found. " + \
-            "Is it installed?")
-        sys.exit(1)
+        if fail_if_not_found:
+            print("drudder: error: no docker-compose found. " + \
+                "Is it installed?")
+            sys.exit(1)
+        return None
 
     @staticmethod
     def btrfs_path():
@@ -607,23 +1355,26 @@ class SystemInfo(object):
             "-c", "%i", path]).decode('utf-8', 'ignore').strip()
         return (output == "256")
 
-def yaml_error():
-    pip_name = "pip3"
-    if SystemInfo.locate_binary(pip_name) == None:
-        pip_name = "python3-pip"
-        if SystemInfo.locate_binary(pip_name) == None:
-            pip_name = "python-pip3"
-            if SystemInfo.locate_binary(pip_name) == None:
-                pip_name = None
-    if pip_name != None:
-        print("drudder: error: no PyYAML available. " +\
-            "Install PyYAML using:", file=sys.stderr)
-        print("    sudo " + pip_name + " install pyyaml")
-    else:
-        print("drudder: error: no PyYaml available. (pip3 is also " +\
-            "unavailable??)", file=sys.stderr)
+Installer.check_and_install_missing()
+
+yaml_available = False
+try:
+    import yaml
+    yaml_available = True
+except ImportError as e1:
+    yaml_available = False
+    yml_lib_path = YAMLInstallInfo.custom_yaml_install_path()
+    if yml_lib_path != None and os.path.exists(yml_lib_path):
+        sys.path.insert(0, yml_lib_path + "/lib3/")
+        sys.path.insert(0, yml_lib_path + "/lib3/yaml/")
+        try:
+            import yaml
+            yaml_available = True
+        except ImportError as e2:
+            pass
 if not yaml_available:
-    yaml_error()
+    print("drudder: error: PyYAML import unexpectedly failed. " +\
+        "Please file a bug at " + str(BUG_URL))
     sys.exit(1)
 
 class DoubleLineBreakFormatter(HelpFormatter):
@@ -1356,7 +2107,7 @@ class Service(object):
         try:
             env = os.environ.copy()
             env["COLUMNS"] = "200"
-            output = SystemInfo.check_output_with_isolated_pty([
+            output = SubprocessHelpers.check_output_with_isolated_pty([
                 SystemInfo.docker_compose_path(), "ps"],
                 cwd=self.service_path, stderr=subprocess.STDOUT,
                 timeout=10, env=env).\
@@ -1783,13 +2534,16 @@ parser.add_argument("action",
     "snapshot": store an atomic snapshot of the live data of the service
                 specified as argument (from livedata/) in livedata-snapshots/
 
-    "clean": clean up all stopped containers. THIS IS NOT REVERSIBLE. The
-             docker images of course won't be touched.
+    "clean": clean up all stopped containers and all dangling volumes.
+             THIS IS NOT REVERSIBLE. The docker images won't be touched.
 
     "dump-container-info" : dump all sorts of detailed container info as YAML.
                             Mainly useful if you want to process the combined
                             data computed by drudder with another tool
                             of yours.
+
+    "install-tools" : install all required components and tools to run drudder
+                      on this computer
     ''')
 
     )
@@ -2912,7 +3666,12 @@ def main():
     parser.add_argument("action",
         help=textwrap.dedent('''\
         Possible values:
-        
+
+        "install-tools": install and upgrade all required tools like
+                         docker-machine and docker-compose on the local
+                         computer. This will automatically fetch and provide
+                         anything to require drudder.
+ 
         "list": list all known services.
 
         "start": start the service specified as argument (or "all" for all).
