@@ -425,6 +425,7 @@ class SubprocessHelper(object):
                     result).decode("utf-8", "ignore")
             dumped = json.dumps(result_dict)
             child_conn.send(dumped)
+            child_conn.flush()
             time.sleep(1)
             child_conn.close()
 
