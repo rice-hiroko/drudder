@@ -466,7 +466,91 @@ class SubprocessHelper(object):
                 raise e
             return base64.b64decode(result_dict["result"])
 
+class DoubleLineBreakFormatter(HelpFormatter):
+    """ Retains double line breaks/paragraphs """
+    def _split_lines(self, text, width):
+        return self._fill_text(text, width, "").splitlines(False)
 
+    def _fill_text(self, t, width, indent):
+        t = " ".join([s for s in t.replace("\t", " ").strip("\t ").split(" ")\
+            if len(s) > 0]).replace("\n ", "\n").replace(" \n", " ")
+        ts = re.sub("([^\n])\n([^\n])", "\\1 \\2", t).split("\n\n")
+        result = [textwrap.fill(paragraph, width,
+            initial_indent=indent, subsequent_indent=indent)\
+            for paragraph in ts]
+        return "\n\n".join(result)
+
+class CommandLineArgumentParser(object):
+    @staticmethod
+    def construct_parser():
+        parser = argparse.ArgumentParser(description=textwrap.dedent('''\
+            drudder: a tool for managing a larger collection of
+            docker-compose.yml-specified container groups simply.'''
+            ),
+            formatter_class=DoubleLineBreakFormatter)
+        parser.add_argument("action",
+            help=textwrap.dedent('''\
+            Possible values:
+
+            "install-tools": install and upgrade all required tools like
+                             docker-machine and docker-compose on the local
+                             computer. This will automatically fetch and provide
+                             anything to require drudder.
+     
+            "list": list all known services.
+
+            "start": start the service specified as argument (or "all" for all).
+
+            "stop": stop the service specified as argument (or "all" for all).
+
+            "restart": restart the service specified as argument (or "all" for all).
+
+            "info": show more detailed info for the given service (or "all for
+                    all).
+
+            "logs": output the logs of all the docker containers of the service
+                    specified as argument (or "all" for all).
+
+            "shell": start an interactive shell in the specified service's specified
+                     subservice (parameters: <service> <subservice>) - the subservice
+                     is optional if the docker-compose.yml has just one
+                     container/subservice.
+
+            "snapshot": store an atomic snapshot of the live data of the service
+                        specified as argument (from livedata/) in livedata-snapshots/
+
+            "clean": clean up all stopped containers. THIS IS NOT REVERSIBLE. The
+                     docker images of course won't be touched.
+
+            "dump-container-info" : dump all sorts of detailed container info as YAML.
+                                    Mainly useful if you want to process the combined
+                                    data computed by drudder with another tool
+                                    of yours.
+            ''')
+
+            )
+        parser.add_argument("argument", nargs="*",
+            help="argument(s) to given action")
+        parser.add_argument("--version", "-v", help="show version and quit",
+            default=False, action="store_true",
+            dest="show_version")
+        parser.add_argument("--force",
+            default=False, action="store_true",
+            help="Can be used to override various safety warnings. Consult the "+\
+                "respective warning prompted by an action to understand the "+\
+                "consequences",
+            dest="force")
+        return parser
+
+if len(" ".join(sys.argv[1:]).strip()) == 0 or \
+        sys.argv[1] == "--version" or sys.argv[1] == "-v" or \
+        sys.argv[1] == "-h" or sys.argv[1] == "--help":
+    parser = CommandLineArgumentParser.construct_parser()
+    parser.print_help()
+    if len(" ".join(sys.argv[1:]).strip()) == 0:
+        sys.exit(1)
+    sys.exit(0)
+ 
 class YAMLInstallInfo(object):
     @staticmethod
     def test_for_yaml():
@@ -1375,20 +1459,6 @@ if not yaml_available:
     print("drudder: error: PyYAML import unexpectedly failed. " +\
         "Please file a bug at " + str(BUG_URL))
     sys.exit(1)
-
-class DoubleLineBreakFormatter(HelpFormatter):
-    """ Retains double line breaks/paragraphs """
-    def _split_lines(self, text, width):
-        return self._fill_text(text, width, "").splitlines(False)
-
-    def _fill_text(self, t, width, indent):
-        t = " ".join([s for s in t.replace("\t", " ").strip("\t ").split(" ")\
-            if len(s) > 0]).replace("\n ", "\n").replace(" \n", " ")
-        ts = re.sub("([^\n])\n([^\n])", "\\1 \\2", t).split("\n\n")
-        result = [textwrap.fill(paragraph, width,
-            initial_indent=indent, subsequent_indent=indent)\
-            for paragraph in ts]
-        return "\n\n".join(result)
 
 class DockerComposeYml(object):
     def __init__(self, path, container=None):
@@ -3657,63 +3727,7 @@ def main():
         yaml_error()
         sys.exit(1)
 
-    parser = argparse.ArgumentParser(description=textwrap.dedent('''\
-        drudder: a tool for managing a larger collection of
-        docker-compose.yml-specified container groups simply.'''
-        ),
-        formatter_class=DoubleLineBreakFormatter)
-    parser.add_argument("action",
-        help=textwrap.dedent('''\
-        Possible values:
-
-        "install-tools": install and upgrade all required tools like
-                         docker-machine and docker-compose on the local
-                         computer. This will automatically fetch and provide
-                         anything to require drudder.
- 
-        "list": list all known services.
-
-        "start": start the service specified as argument (or "all" for all).
-
-        "stop": stop the service specified as argument (or "all" for all).
-
-        "restart": restart the service specified as argument (or "all" for all).
-
-        "info": show more detailed info for the given service (or "all for
-                all).
-
-        "logs": output the logs of all the docker containers of the service
-                specified as argument (or "all" for all).
-
-        "shell": start an interactive shell in the specified service's specified
-                 subservice (parameters: <service> <subservice>) - the subservice
-                 is optional if the docker-compose.yml has just one
-                 container/subservice.
-
-        "snapshot": store an atomic snapshot of the live data of the service
-                    specified as argument (from livedata/) in livedata-snapshots/
-
-        "clean": clean up all stopped containers. THIS IS NOT REVERSIBLE. The
-                 docker images of course won't be touched.
-
-        "dump-container-info" : dump all sorts of detailed container info as YAML.
-                                Mainly useful if you want to process the combined
-                                data computed by drudder with another tool
-                                of yours.
-        ''')
-
-        )
-    parser.add_argument("argument", nargs="*",
-        help="argument(s) to given action")
-    parser.add_argument("--version", help="show version and quit",
-        default=False, action="store_true",
-        dest="show_version")
-    parser.add_argument("--force",
-        default=False, action="store_true",
-        help="Can be used to override various safety warnings. Consult the "+\
-            "respective warning prompted by an action to understand the "+\
-            "consequences",
-        dest="force")
+    parser = CommandLineArgumentParser.construct_parser()
     if len(" ".join(sys.argv[1:]).strip()) == 0:
         parser.print_help()
         sys.exit(1)
