@@ -2176,7 +2176,7 @@ class Service(object):
         try:
             env = os.environ.copy()
             env["COLUMNS"] = "200"
-            output = SubprocessHelpers.check_output_with_isolated_pty([
+            output = SubprocessHelper.check_output_with_isolated_pty([
                 SystemInfo.docker_compose_path(), "ps"],
                 cwd=self.service_path, stderr=subprocess.STDOUT,
                 timeout=10, env=env).\
