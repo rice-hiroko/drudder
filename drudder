@@ -1838,7 +1838,7 @@ class ServiceContainer(object):
     @property
     def default_container_name(self):
         fpath = os.path.normpath(os.path.abspath(self.service_path))
-        return (os.path.basename(fpath).replace("-", "")
+        return (os.path.basename(fpath).replace("-", "").replace(".", "")
             + "_" + str(self.name) + "_1")
 
     @property
