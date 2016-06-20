@@ -231,6 +231,25 @@ import uuid
 class SubprocessHelper(object):
     @staticmethod
     def check_output_with_stdout_copy(cmd, shell=False, stdout=None,
+            stderr=None, cwd=None, env=None, pty=False, write_function=None):
+        """ Like subprocess.check_output, but also copies the stdout/stderr to
+            sys.stdout/sys.stderr in realtime while the process runs while
+            still returning the full output as a result after termination.
+
+            Use write_function to specify a custom write function in addition
+            to sys.stdout/sys.stderr copying which can also handle the output
+            in realtime in some point.
+
+            Use pty=True for optional pty wrapping on Unix to make the
+            launched command think it runs in an interactive terminal (this
+            will also remove any sort of stdout/stdin buffering or delay).
+        """
+        return SubprocessHelper._check_output_extended(cmd, shell=shell,
+            stdout=stdout, stderr=stderr, cwd=cwd, env=env, pty=pty,
+            write_function=write_function, copy_to_regular_stdout_stderr=True)
+
+    @staticmethod
+    def _check_output_extended(cmd, shell=False, stdout=None,
             stderr=None, cwd=None, env=None, pty=False, write_function=None,
             copy_to_regular_stdout_stderr=True):
         # Get actual stdout/stderr as to be used internally:
@@ -387,7 +406,7 @@ class SubprocessHelper(object):
             accessing the main terminal itself where drudder itself is
             running from.
         """
-        return SubprocessHelper.check_output_with_stdout_copy(
+        return SubprocessHelper._check_output_extended(
             cmd, shell=shell, cwd=cwd, env=env, stdout=stdout, stderr=stderr,
             pty=True, copy_to_regular_stdout_stderr=False)
 
