@@ -234,15 +234,24 @@ class SubprocessHelper(object):
             stderr=None, cwd=None, env=None, pty=False, write_function=None):
         """ Like subprocess.check_output, but also copies the stdout/stderr to
             sys.stdout/sys.stderr in realtime while the process runs while
-            still returning the full output as a result after termination.
+            still returning the full output as a return value after
+            termination and while still raising subprocess.CalledProcessError
+            when encountering a process exit code other than 0.
+
+            Optional parameters for extended behavior:
+
+            Use pty=True for optional pseudo-TTY wrapping on Unix to make the
+            launched command think it runs in an interactive terminal (this
+            will also remove any sort of stdout/stdin buffering or delay). All
+            other behavior remains the same.
 
             Use write_function to specify a custom write function in addition
-            to sys.stdout/sys.stderr copying which can also handle the output
-            in realtime in some point.
-
-            Use pty=True for optional pty wrapping on Unix to make the
-            launched command think it runs in an interactive terminal (this
-            will also remove any sort of stdout/stdin buffering or delay).
+            to sys.stdout/sys.stderr copying which can process the output in
+            realtime in some way. If you want to abort the process from inside
+            the write function, just raise an exception. If that happens,
+            check_output_with_stdout_copy will raise a RuntimeError instead of
+            the regular subprocess.CalledProcessError to indicate an abort
+            caused by a write_function error.
         """
         return SubprocessHelper._check_output_extended(cmd, shell=shell,
             stdout=stdout, stderr=stderr, cwd=cwd, env=env, pty=pty,
@@ -401,10 +410,8 @@ class SubprocessHelper(object):
     @staticmethod
     def check_output_with_isolated_pty(cmd, shell=False, cwd=None,
             stdout=None, stderr=None, timeout=None, env=None):
-        """ This is a re-implementation of subprocess.check_output() which
-            will isolate the child process in a pseudo-TTY to prevent it from
-            accessing the main terminal itself where drudder itself is
-            running from.
+        """ Like subprocess.check_output, but runs the process in a pseudo-TTY
+            using python's pty module.
         """
         return SubprocessHelper._check_output_extended(
             cmd, shell=shell, cwd=cwd, env=env, stdout=stdout, stderr=stderr,
