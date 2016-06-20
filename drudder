@@ -231,7 +231,8 @@ import uuid
 class SubprocessHelper(object):
     @staticmethod
     def check_output_with_stdout_copy(cmd, shell=False, stdout=None,
-            stderr=None, cwd=None, env=None, pty=False, write_function=None):
+            stderr=None, cwd=None, env=None, pty=False, write_function=None,
+            copy_to_regular_stdout_stderr=True):
         # Get actual stdout/stderr as to be used internally:
         actual_stdout = stdout
         if stdout == None or stdout == sys.stderr:
@@ -307,12 +308,17 @@ class SubprocessHelper(object):
             "user_write_error" : None,
         }
         def writer(data):
+            """ This function gets called by the thread to store data from
+                stdin to be returned or used later on.
+            """
             if len(data) == 0:
                 return
             try:
+                # Call user write function:
                 if write_function != None:
                     write_function(data)
             except Exception as e:
+                # Propagate error if the user function caused an error:
                 presented_output_store["user_write_error"] = str(e)
                 try:
                     process.kill()
@@ -320,16 +326,18 @@ class SubprocessHelper(object):
                     pass
             presented_output_store["data"] += data
         if actual_stdout == subprocess.PIPE:  # we need to collect stdout.
-            copy_to = stdout
-            if stdout == None or stdout == subprocess.PIPE:
+            if copy_to_regular_stdout_stderr:
                 copy_to = sys.stdout
+            else:
+                copy_to = None
             stdout_reader = OutputReader(process, process.stdout, writer,
                 copy_to=copy_to)
             stdout_reader.start()
         if actual_stderr == subprocess.PIPE:  # we need to collect stderr.
-            copy_to = stderr
-            if stderr == None or stderr == subprocess.PIPE:
+            if copy_to_regular_stdout_stderr:
                 copy_to = sys.stderr
+            else:
+                copy_to = None
             if stderr == subprocess.STDOUT:
                 stderr_reader = OutputReader(process, process.stderr, writer,
                     copy_to=sys.stdout)
@@ -340,7 +348,6 @@ class SubprocessHelper(object):
 
         # Wait for process to end:
         process.wait()
-        time.sleep(1)
         try:
             process.stdout.close()
         except Exception:
@@ -380,92 +387,9 @@ class SubprocessHelper(object):
             accessing the main terminal itself where drudder itself is
             running from.
         """
-        if cwd == None:
-            cwd = os.getcwd()
-        if stderr == None:
-            stderr = subprocess.DEVNULL
-        if env == None:
-            env = os.environ.copy()
-
-        parent_conn, child_conn = multiprocessing.Pipe()
-        pid, fd = pty.fork()
-
-        # Child with pseudo TTY (since some tools like to detect the terminal
-        # size and greatly mess with our parsing):
-        if pid == 0:
-            result_dict = dict()
-            error_happened = None
-            result = None
-            # Run actual command in forked process with fake TTY:
-            try:
-                if stdout != None:
-                    result = subprocess.check_output(cmd, shell=shell,
-                        cwd=cwd, stdout=stdout, stderr=stderr,
-                        timeout=timeout, env=env)
-                else:
-                    result = subprocess.check_output(cmd, shell=shell,
-                        cwd=cwd, stderr=stderr, timeout=timeout,
-                        env=env)
-                try:
-                    result = result.encode("utf-8", "replace")
-                except AttributeError:
-                    pass
-            except Exception as e:
-                if isinstance(e, CalledProcessError):
-                    result_dict["result"] = base64.b64encode(
-                        e.output).decode("utf-8", "ignore")
-                error_happened = e
-
-            # Collect result and send back to parent:
-            result_dict["error_happened"] = \
-                None if error_happened is None else str(
-                    error_happened)
-            if result != None:
-                result_dict["result"] = base64.b64encode(
-                    result).decode("utf-8", "ignore")
-            dumped = json.dumps(result_dict)
-            child_conn.send(dumped)
-            child_conn.flush()
-            time.sleep(1)
-            child_conn.close()
-
-            # We're done. Parent will receive result and do stuff:
-            time.sleep(1)
-            os.exit(0)
-        else:
-            try:
-                # Wait for child to execute process and report result:
-                if timeout == None:
-                    result_dict = json.loads(parent_conn.recv())
-                else:
-                    if not parent_conn.poll(timeout):
-                        class PtyTimeoutError(subprocess.CalledProcessError):
-                            def __init__(self, exit_code, cmd, cwd):
-                                super().__init__(exit_code, cmd)
-                                self.cwd = cwd
-
-                            def __repr__(self):
-                                return "PtyTimeoutError: command " +\
-                                    "timed out: " + str(self.cmd) +\
-                                    " (cwd: " + str(self.cwd) + ")"
-
-                            def __str__(self):
-                                return self.__repr__()
-
-                        e = PtyTimeoutError(1, cmd, cwd)
-                        e.output = b""
-                        raise e
-                    result_dict = json.loads(parent_conn.recv())
-            finally:
-                parent_conn.close()
-            if result_dict["error_happened"] != None:
-                e = subprocess.CalledProcessError(1, cmd)
-                if result_dict["result"] != None:
-                    e.output = base64.b64decode(result_dict["result"])
-                else:
-                    e.output = b""
-                raise e
-            return base64.b64decode(result_dict["result"])
+        return SubprocessHelper.check_output_with_stdout_copy(
+            cmd, shell=shell, cwd=cwd, env=env, stdout=stdout, stderr=stderr,
+            pty=True, copy_to_regular_stdout_stderr=False)
 
 class DoubleLineBreakFormatter(HelpFormatter):
     """ Retains double line breaks/paragraphs """
