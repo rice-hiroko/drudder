@@ -214,7 +214,6 @@ import json
 import multiprocessing
 import os
 import platform
-import pty
 import queue
 import subprocess
 import random
@@ -283,9 +282,9 @@ class SubprocessHelper(object):
                 cwd=cwd, env=env)
         else:
             process = subprocess.Popen([sys.executable,
-                "-c", "import pty; import sys; " +\
-                "(result, exit_code) = pty.spawn(sys.argv[1:]); " +\
-                "sys.exit(exit_code)"] + cmd,
+                "-c", "import pty\nimport sys\n" +\
+                "exit_code = pty.spawn(sys.argv[1:])\n" +\
+                "sys.exit((int(exit_code) & (255 << 8)) >> 8)"] + cmd,
                 shell=shell,
                 stdout=actual_stdout, stderr=actual_stderr,
                 cwd=cwd, env=env)
@@ -494,14 +493,17 @@ class CommandLineArgumentParser(object):
             dest="force")
         return parser
 
-if len(" ".join(sys.argv[1:]).strip()) == 0 or \
-        sys.argv[1] == "--version" or sys.argv[1] == "-v" or \
-        sys.argv[1] == "-h" or sys.argv[1] == "--help":
-    parser = CommandLineArgumentParser.construct_parser()
-    parser.print_help()
-    if len(" ".join(sys.argv[1:]).strip()) == 0:
-        sys.exit(1)
-    sys.exit(0)
+# Abort early before attempting to install missing packages when --help or
+# --version was specified:
+if __name__ == "__main__":
+    if len(" ".join(sys.argv[1:]).strip()) == 0 or \
+            sys.argv[1] == "--version" or sys.argv[1] == "-v" or \
+            sys.argv[1] == "-h" or sys.argv[1] == "--help":
+        parser = CommandLineArgumentParser.construct_parser()
+        parser.print_help()
+        if len(" ".join(sys.argv[1:]).strip()) == 0:
+            sys.exit(1)
+        sys.exit(0)
  
 class YAMLInstallInfo(object):
     @staticmethod
@@ -1390,7 +1392,8 @@ class SystemInfo(object):
             "-c", "%i", path]).decode('utf-8', 'ignore').strip()
         return (output == "256")
 
-Installer.check_and_install_missing()
+if __name__ == "__main__":
+    Installer.check_and_install_missing()
 
 yaml_available = False
 try:
@@ -1407,7 +1410,7 @@ except ImportError as e1:
             yaml_available = True
         except ImportError as e2:
             pass
-if not yaml_available:
+if not yaml_available and __name__ == "__main__":
     print("drudder: error: PyYAML import unexpectedly failed. " +\
         "Please file a bug at " + str(BUG_URL))
     sys.exit(1)
@@ -2140,9 +2143,17 @@ class Service(object):
                     "installed with " +\
                     "a version incompatible to docker.", color="red")
                 sys.exit(1)
+            if output.find("ERROR") > 0 and output.find("ERROR") <= 10 and\
+                    output.find("In file") > output.find("ERROR") and \
+                    output.find("In file ") <= 20 and \
+                    output.find("docker-compose.yml") >= 0:
+                print_msg("warning: it appears the docker-compose file " +\
+                    "has a syntax error: " + str(output), color="yellow",
+                    service=self.name)
+                return []
             raise e
         output = output.\
-            replace("\r", "\n").replace("\n\n", "").split("\n")
+            replace("\r", "\n").replace("\n\n", "\n").split("\n")
 
         skipped_past_dashes = False
         for output_line in output:
@@ -2153,7 +2164,7 @@ class Service(object):
                 continue
             output_line = output_line.strip()
             if len(output_line) > 0 and output_line.find(" Up") > 0:
-                # this is a running container!
+                # This is a running container!
                 space_pos = output_line.find(" ")
                 running_containers.append(output_line[:space_pos])
         l = [self._fix_container_name(container) \
@@ -2578,14 +2589,15 @@ parser.add_argument("--force",
         "respective warning prompted by an action to understand the "+\
         "consequences",
     dest="force")
-if len(" ".join(sys.argv[1:]).strip()) == 0:
-    parser.print_help()
-    sys.exit(1)
-for arg in sys.argv[1:]:
-    if arg == "--version" or arg == "-v" or arg == "-V":
-        print("drudder version " + str(TOOL_VERSION))
-        sys.exit(0)
-args = parser.parse_args()
+if __name__ == "__main__":
+    if len(" ".join(sys.argv[1:]).strip()) == 0:
+        parser.print_help()
+        sys.exit(1)
+    for arg in sys.argv[1:]:
+        if arg == "--version" or arg == "-v" or arg == "-V":
+            print("drudder version " + str(TOOL_VERSION))
+            sys.exit(0)
+    args = parser.parse_args()
 
 ensure_docker = SystemInfo.docker_path()
 ensure_docker_compose = SystemInfo.docker_compose_path()
