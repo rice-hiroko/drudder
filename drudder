@@ -284,7 +284,8 @@ class SubprocessHelper(object):
         else:
             process = subprocess.Popen([sys.executable,
                 "-c", "import pty; import sys; " +\
-                "pty.spawn(sys.argv[1:])"] + cmd,
+                "(result, exit_code) = pty.spawn(sys.argv[1:]); " +\
+                "sys.exit(exit_code)"] + cmd,
                 shell=shell,
                 stdout=actual_stdout, stderr=actual_stderr,
                 cwd=cwd, env=env)
