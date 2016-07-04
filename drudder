@@ -1388,7 +1388,7 @@ class SystemInfo(object):
             also identified as such by the "stat" tool (returns True) or not
             (returns False).
         """
-        output = subprocess.check_output([locate_binary("stat"),
+        output = subprocess.check_output([SystemInfo.locate_binary("stat"),
             "-c", "%i", path]).decode('utf-8', 'ignore').strip()
         return (output == "256")
 
