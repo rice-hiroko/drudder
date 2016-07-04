@@ -3016,7 +3016,27 @@ class Snapshots(object):
             snapshot_name)
         print_msg("copying to " + snapshot_specific_dir,
             service=self.service.name)
-        shutil.copytree(snapshot_dir, snapshot_specific_dir, symlinks=True)
+        try:
+            shutil.copytree(snapshot_dir, snapshot_specific_dir, symlinks=True)
+        except shutil.Error as e:
+            # Check for errors we care about:
+            relevant_errors = []
+            for err in e.args[0]:
+                src, dst, msg = err
+                if str(msg).startswith("[Errno 6]"):
+                    # This occurs with Unix sockets. Check if it is one:
+                    mode = os.stat(src).st_mode
+                    if stat.S_ISSOCK(mode):
+                        continue # It is. Skip it!
+                    else:
+                        print_msg("warning: errno 6 when accessing " +
+                            "file, but os.stat says no unix socket: " +
+                            src, color="yellow")
+                # This is an unknown error we most likely care about:
+                relevant_errors.append(err)
+            if len(relevant_errors) > 0:
+                e.args[0] = relevant_errors
+                raise e 
         subprocess.check_output([SystemInfo.btrfs_path(), "subvolume",
             "delete", snapshot_dir])
         assert(not os.path.exists(snapshot_dir))
