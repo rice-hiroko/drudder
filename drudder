@@ -2918,10 +2918,14 @@ class Snapshots(object):
                 for err in e.args[0]:
                     src, dst, msg = err
                     if str(msg).startswith("[Errno 6]"):
-                        # This occurs with Unix socekts. Check if it is one:
+                        # This occurs with Unix sockets. Check if it is one:
                         mode = os.stat(src).st_mode
                         if stat.S_ISSOCK(mode):
                             continue # It is. Skip it!
+                        else:
+                            print_msg("warning: errno 6 when accessing " +
+                                "file, but os.stat says no unix socket: " +
+                                src, color="yellow")
                     # This is an unknown error we most likely care about:
                     relevant_errors.append(err)
                 if len(relevant_errors) > 0:
