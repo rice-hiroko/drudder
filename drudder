@@ -2115,7 +2115,7 @@ class Service(object):
         """
         assert(container_name != None)
         # Check if a container name matches fully:
-        for container in self.containers:
+        for container in self._get_containers(_avoid_running_recursion=True):
             if container.current_running_instance_name == container_name \
                     or container.default_container_name == container_name:
                 return container.name
@@ -2143,7 +2143,7 @@ class Service(object):
                     return container_name 
 
         # Check for whether a container starts with this name:
-        for container in self.containers:
+        for container in self._get_containers(_avoid_running_recursion=True):
             if container.current_running_instance_name.startswith(
                     container_name):
                 if matched_name != None:
