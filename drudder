@@ -2136,11 +2136,11 @@ class Service(object):
             if not default_id.endswith("_1"):
                 continue
             id_base = default_id[:-len("1")]
-            if container_name.startswith(id_base + "run_"):
+            if container_id.startswith(id_base + "run_"):
                 ending = container_id[len(id_base + "run_"):]
                 if is_int(ending):
                     return container_id
-            elif container_name.startswith (id_base):
+            elif container_id.startswith (id_base):
                 ending = container_id[len(id_base):]
                 if is_int(ending):
                     return container_id
