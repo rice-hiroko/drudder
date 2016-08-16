@@ -2124,7 +2124,7 @@ class Service(object):
             name = container.default_container_name
             if not name.endswith("_1"):
                 continue
-            name_base = name[:len("1")]
+            name_base = name[:-len("1")]
             if container_name.startswith (name_base + "run_"):
                 ending = container_name[len(name_base + "run_"):]
                 if is_int(ending):
