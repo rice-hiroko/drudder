@@ -2331,7 +2331,10 @@ class Service(object):
         results = []
 
         # Get running names to find out actually existing containers:
-        running_names = self._get_running_service_container_names()
+        if not _avoid_running_recursion:
+            running_names = self._get_running_service_container_names()
+        else:
+            running_names = []
 
         def add_container_type(container_name, image_name=None):
             for running_name in running_names:
