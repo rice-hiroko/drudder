@@ -2118,11 +2118,10 @@ class Service(object):
             it will usually still be unique. In this function, we try to get
             back the full unshortened name.
         """
-        assert(container_name != None)
+        assert(container_id != None)
         # Check if a container name matches fully:
         for container in self._get_containers(_avoid_running_recursion=True):
-            if container.current_running_instance_name == container_name \
-                    or container.default_container_id == container_name:
+            if container.container_id == container_id:
                 return container_id
 
         # Check if this matches a common name pattern:
@@ -2136,13 +2135,13 @@ class Service(object):
             default_id = container.container_id
             if not default_id.endswith("_1"):
                 continue
-            name_base = default_id[:-len("1")]
-            if container_name.startswith (name_base + "run_"):
-                ending = container_name[len(name_base + "run_"):]
+            id_base = default_id[:-len("1")]
+            if container_name.startswith(id_base + "run_"):
+                ending = container_id[len(id_base + "run_"):]
                 if is_int(ending):
                     return container_id
-            elif container_name.startswith (name_base):
-                ending = container_name[len(name_base):]
+            elif container_name.startswith (id_base):
+                ending = container_id[len(id_base):]
                 if is_int(ending):
                     return container_id
 
@@ -2150,11 +2149,11 @@ class Service(object):
         matched_id = None
         for container in self._get_containers(_avoid_running_recursion=True):
             if container.container_id.startswith(
-                    container_name):
+                    container_id):
                 if matched_id != None:
                     raise RuntimeError("encountered unexpected non-unique " +\
                         "container label trying to find the full name for "+\
-                         "\"" + str(container_name) + "\": variant A: " +\
+                         "\"" + str(container_id) + "\": variant A: " +\
                         str(matched_id) + ", variant B: " +\
                         str(container.container_id))
                 matched_id = container.container_id
