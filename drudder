@@ -432,7 +432,7 @@ class ExecutionCache(object):
             ("cmd", tuple(cmd)),
             ("shell", shell),
             ("cwd", cwd),
-            ("_env_keys", frozenset(env.keys()))
+            ("_env_keys", frozenset((env or {}).keys()))
         )
         # Wipe cache if we're supposed to ignore it:
         if ignore_cache:
