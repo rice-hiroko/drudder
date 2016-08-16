@@ -1790,7 +1790,7 @@ class ServiceContainer(object):
     @property
     def running(self):
         ids = self.service._get_running_service_container_ids()
-        return (self.container_ids in ids)
+        return (self.container_id in ids)
 
     @property
     def service(self):
