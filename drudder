@@ -3169,8 +3169,7 @@ class TargetsParser(object):
                 containers = []
                 for service_container in service.containers:
                     if service_container.name == container_name:
-                        containers = [ service_container ]
-                        break
+                        containers.append(service_container)
                 # Check if the container was found by name or not:
                 if len(containers) == 0:
                     if print_error:
