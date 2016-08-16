@@ -1789,8 +1789,8 @@ class ServiceContainer(object):
 
     @property
     def running(self):
-        names = self.service._get_running_service_container_names()
-        return (self.name in names)
+        ids = self.service._get_running_service_container_ids()
+        return (self.container_ids in ids)
 
     @property
     def service(self):
@@ -2111,7 +2111,7 @@ class Service(object):
         scan_dir("/srv")
         return services
 
-    def _fix_container_name(self, container_name):
+    def _fix_container_id(self, container_id):
         """ !! BIG HACK !!
             Sometimes docker-compose gives us just a shortened name for a
             container. While I am not fully aware of the algorithm, I assume
@@ -2123,10 +2123,9 @@ class Service(object):
         for container in self._get_containers(_avoid_running_recursion=True):
             if container.current_running_instance_name == container_name \
                     or container.default_container_id == container_name:
-                return container.name
+                return container_id
 
         # Check if this matches a common name pattern:
-        matched_name = None
         for container in self._get_containers(_avoid_running_recursion=True):
             def is_int(v):
                 try:
@@ -2134,33 +2133,34 @@ class Service(object):
                 except (TypeError, ValueError):
                     return False
                 return True
-            name = container.default_container_id
-            if not name.endswith("_1"):
+            default_id = container.container_id
+            if not default_id.endswith("_1"):
                 continue
-            name_base = name[:-len("1")]
+            name_base = default_id[:-len("1")]
             if container_name.startswith (name_base + "run_"):
                 ending = container_name[len(name_base + "run_"):]
                 if is_int(ending):
-                    return container_name
+                    return container_id
             elif container_name.startswith (name_base):
                 ending = container_name[len(name_base):]
                 if is_int(ending):
-                    return container_name 
+                    return container_id
 
         # Check for whether a container starts with this name:
+        matched_id = None
         for container in self._get_containers(_avoid_running_recursion=True):
-            if container.current_running_instance_name.startswith(
+            if container.container_id.startswith(
                     container_name):
-                if matched_name != None:
+                if matched_id != None:
                     raise RuntimeError("encountered unexpected non-unique " +\
                         "container label trying to find the full name for "+\
                          "\"" + str(container_name) + "\": variant A: " +\
-                        str(matched_name) + ", variant B: " +\
-                        str(container.name))
-                matched_name = container.name
-        return matched_name
+                        str(matched_id) + ", variant B: " +\
+                        str(container.container_id))
+                matched_id = container.container_id
+        return matched_id
 
-    def _get_running_service_container_names(self):
+    def _get_running_service_container_ids(self):
         """ Get all running containers of the given service.
             Returns a list of container ids.
         """
@@ -2204,9 +2204,17 @@ class Service(object):
                 # This is a running container!
                 space_pos = output_line.find(" ")
                 running_containers.append(output_line[:space_pos])
-        l = [self._fix_container_name(container) \
+        l = [self._fix_container_id(container) \
             for container in running_containers]
         return [name for name in l if name is not None]
+
+    def _get_running_service_container_names(self):
+        names = set()
+        ids = set(self._get_running_service_container_ids())
+        for container in self._get_containers(_avoid_running_recursion=True):
+            if container.container_id in ids:
+                names.add(container.container_id)
+        return list(ids)
 
     def _internal_docker_compose_links(self, container_name):
         """ Attempt to parse and return all containers referenced as external
