@@ -2122,7 +2122,7 @@ class Service(object):
 
         # Check if this matches a common name pattern:
         matched_name = None
-        for container in self.containers:
+        for container in self._get_containers(_avoid_running_recursion=True):
             def is_int(v):
                 try:
                     dat_int = int(v)
@@ -2322,6 +2322,9 @@ class Service(object):
 
     @property
     def containers(self):
+        return self._get_containers()
+
+    def _get_containers(self, _avoid_running_recursion=False):
         """ Get all containers specified for the given service's
             docker-compose.yml.
         """
@@ -2330,7 +2333,7 @@ class Service(object):
         # Get running names to find out actually existing containers:
         running_names = self._get_running_service_container_names()
 
-        def add_container_type(name, image_name, container_name):
+        def add_container_type(container_name, image_name=None):
             for running_name in running_names:
                 running_base = running_name.rpartition("_")[0]
                 if name.default_container_name == running_base or\
@@ -2356,10 +2359,10 @@ class Service(object):
                 if property_name == "image":
                     # This container is constructed from an image:
                     image_name = value
-                    add_container_type(name, image_name, container_name)
+                    add_container_type(container_name, image_name=image_name)
                 elif property_name == "build":
                     # Built from a directory with Dockerfile:
-                    add_container_type(name, None, container_name)
+                    add_container_type(container_name)
         return results
 
 class FailedLaunchTracker(object):
