@@ -1690,18 +1690,18 @@ class ServiceContainer(object):
         docker-compose commands can be run.
     """
     def __init__(self, service_name, service_path, container_name,
-            image_name=None, special_docker_container_id=None):
+            image_name=None, special_container_id=None):
         self.service_name = service_name
         self.service_path = service_path
         self.name = container_name
         self._known_image_name = image_name
-        self.special_docker_container_id = special_docker_container_id
+        self.special_container_id = special_container_id
 
     @property
     def docker_container_id(self):
-        if self.special_docker_container_id == None:
-            return self.default_container_name
-        return self.special_docker_container_id
+        if self.special_container_id == None:
+            return self.default_container_id
+        return self.special_container_id
 
     def __repr__(self):
         return self.service_name + "/" + self.name
@@ -1798,7 +1798,7 @@ class ServiceContainer(object):
         return Service(self.service_name, self.service_path)
 
     @property
-    def default_container_name(self):
+    def default_container_id(self):
         fpath = os.path.normpath(os.path.abspath(self.service_path))
         return (os.path.basename(fpath).replace("-", "").replace(".", "")
             + "_" + str(self.name) + "_1")
@@ -1807,11 +1807,11 @@ class ServiceContainer(object):
     def image_name(self):
         if self._known_image_name != None:
             return self._known_image_name
-        return self.default_container_name
+        return self.default_container_id
 
     @property
     def current_running_instance_name(self):
-        return self.default_container_name
+        return self.default_container_id
 
     def _get_active_volume_directories(self, rw_only=False):
         """ Get the volumes active in this container. If the container hasn't
@@ -1993,7 +1993,7 @@ class ServiceContainer(object):
                 for container in service.containers:
                     if (service == self.service and 
                             link_name == container.name) or \
-                            link_name == container.default_container_name:
+                            link_name == container.default_container_id:
                         target_found = True
                         dependencies.append(ServiceDependency(
                             service.name, service.service_path,
@@ -2066,7 +2066,7 @@ class Service(object):
                 result.add(container)
         return list(result)
 
-    def default_container_name(self, subservice):
+    def default_container_id(self, subservice):
         fpath = os.path.normpath(os.path.abspath(self.service_path))
         return (os.path.basename(fpath).replace("-", "").replace(".", "")
             + "_" + str(subservice) + "_1")
@@ -2122,7 +2122,7 @@ class Service(object):
         # Check if a container name matches fully:
         for container in self._get_containers(_avoid_running_recursion=True):
             if container.current_running_instance_name == container_name \
-                    or container.default_container_name == container_name:
+                    or container.default_container_id == container_name:
                 return container.name
 
         # Check if this matches a common name pattern:
@@ -2134,7 +2134,7 @@ class Service(object):
                 except (TypeError, ValueError):
                     return False
                 return True
-            name = container.default_container_name
+            name = container.default_container_id
             if not name.endswith("_1"):
                 continue
             name_base = name[:-len("1")]
@@ -2344,9 +2344,9 @@ class Service(object):
         def add_container_type(container_name, image_name=None):
             for running_name in running_names:
                 running_base = running_name.rpartition("_")[0]
-                if (self.default_container_name(container_name) ==
+                if (self.default_container_id(container_name) ==
                         running_base or
-                        self.default_container_name(container_name)
+                        self.default_container_id(container_name)
                             + "_run" == running_base):
                     results.append(ServiceContainer(
                         self.name, self.service_path,
@@ -3708,7 +3708,7 @@ class ContainerStatusInfo(object):
             dict_class = OrderedDict
         info = dict_class()
         info["Canonical docker container name"] = \
-            self.container.default_container_name 
+            self.container.default_container_id 
         info["Owning service"] = OrderedDict()
         info["Owning service"]["Name"] = self.container.service.name
         info["Owning service"]["Location"] = \
