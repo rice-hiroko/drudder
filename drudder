@@ -417,6 +417,58 @@ class SubprocessHelper(object):
             cmd, shell=shell, cwd=cwd, env=env, stdout=stdout, stderr=stderr,
             pty=True, copy_to_regular_stdout_stderr=False)
 
+class ExecutionCache(object):
+    def __init__(self, duration_ms=600):
+        self.duration = duration_ms * 0.001
+        self._cache = dict()
+
+    def check_output(self, cmd, **kwargs):
+        return self.check_output_with_isolated_pty(cmd, **kwargs)
+
+    def check_output_with_isolated_pty(self, cmd, shell=False, cwd=None,
+            stdout=None, stderr=None, timeout=None, env=None,
+            ignore_cache=False):
+        cache_key = (
+            ("cmd", tuple(cmd)),
+            ("shell", shell),
+            ("cwd", cwd),
+            ("_env_keys", frozenset(env.keys()))
+        )
+        # Wipe cache if we're supposed to ignore it:
+        if ignore_cache:
+            if cache_key in self._cache:
+                del(self._cache[cache_key])
+
+        # Check for old cache result:
+        entry = None
+        try:
+            entry = self._cache[cache_key]
+            if entry[0] + self.duration < time.monotonic():
+                del(self._cache[cache_key])
+                entry = None
+        except KeyError:
+            pass
+
+        # Return cached result if any:
+        if entry != None:
+            return entry[1]
+
+
+        # Run and add to cache:
+        _had_error = None
+        try:
+            result = SubprocessHelper.check_output_with_isolated_pty(
+                cmd, shell=shell, cwd=cwd, stdout=stdout, stderr=stderr,
+                timeout=timeout, env=env)
+        except subprocess.CalledProcessError as e:
+            result = e.output
+            _had_error = e
+        self._cache[cache_key] = (time.monotonic(), result)
+        if _had_error != None:
+            raise _had_error
+        return result
+execution_cache = ExecutionCache()
+
 class DoubleLineBreakFormatter(HelpFormatter):
     """ Retains double line breaks/paragraphs """
     def _split_lines(self, text, width):
@@ -1819,7 +1871,7 @@ class ServiceContainer(object):
             information is obtained via docker inspection of the container.
         """
         try:
-            output = subprocess.check_output([SystemInfo.docker_path(),
+            output = execution_cache.check_output([SystemInfo.docker_path(),
                 "inspect", self.current_running_instance_name],
                 stderr=subprocess.DEVNULL)
         except subprocess.CalledProcessError:
@@ -2167,7 +2219,7 @@ class Service(object):
         try:
             env = os.environ.copy()
             env["COLUMNS"] = "200"
-            output = SubprocessHelper.check_output_with_isolated_pty([
+            output = execution_cache.check_output_with_isolated_pty([
                 SystemInfo.docker_compose_path(), "ps"],
                 cwd=self.service_path, stderr=subprocess.STDOUT,
                 timeout=10, env=env).\
