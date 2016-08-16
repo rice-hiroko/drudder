@@ -1698,7 +1698,7 @@ class ServiceContainer(object):
         self.special_container_id = special_container_id
 
     @property
-    def docker_container_id(self):
+    def container_id(self):
         if self.special_container_id == None:
             return self.default_container_id
         return self.special_container_id
@@ -2249,7 +2249,7 @@ class Service(object):
         running_names = self._get_running_service_container_names()
         running_containers = []
         for container in self.containers:
-            if container.docker_container_id in running_names:
+            if container.container_id in running_names:
                 running_containers.append(container)
         return running_containers
 
@@ -2344,9 +2344,9 @@ class Service(object):
         def add_container_type(container_name, image_name=None):
             for running_name in running_names:
                 running_base = running_name.rpartition("_")[0]
-                if (self.default_container_id(container_name) ==
+                if (self.default_container_id(container_name)[:-2] ==
                         running_base or
-                        self.default_container_id(container_name)
+                        self.default_container_id(container_name)[:-2]
                             + "_run" == running_base):
                     results.append(ServiceContainer(
                         self.name, self.service_path,
@@ -3708,6 +3708,7 @@ class ContainerStatusInfo(object):
         info = dict_class()
         info["Canonical docker container name"] = \
             self.container.default_container_id 
+        info["Container id"] = self.container.container_id
         info["Owning service"] = OrderedDict()
         info["Owning service"]["Name"] = self.container.service.name
         info["Owning service"]["Location"] = \
