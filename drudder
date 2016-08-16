@@ -1690,11 +1690,18 @@ class ServiceContainer(object):
         docker-compose commands can be run.
     """
     def __init__(self, service_name, service_path, container_name,
-            image_name=None):
+            image_name=None, special_docker_container_id=None):
         self.service_name = service_name
         self.service_path = service_path
         self.name = container_name
         self._known_image_name = image_name
+        self.special_docker_container_id = special_docker_container_id
+
+    @property
+    def docker_container_id(self):
+        if self.special_docker_container_id == None:
+            return self.default_container_name
+        return self.special_docker_container_id
 
     def __repr__(self):
         return self.service_name + "/" + self.name
@@ -1702,7 +1709,7 @@ class ServiceContainer(object):
     def __hash__(self):
         return hash(self.service_name + \
             os.path.normpath(os.path.abspath(self.service_path)) + \
-            self.name)
+            self.name + (self.special_container_id or ""))
 
     def __eq__(self, other):
         if other is None:
@@ -1715,7 +1722,8 @@ class ServiceContainer(object):
         if (os.path.normpath(os.path.abspath(self.service_path)) !=
                 os.path.normpath(os.path.abspath(other.service_path))):
             return False
-        if other.name != self.name:
+        if other.name != self.name or \
+                other.special_container_id != self.special_container_id:
             return False
         return True
 
@@ -2236,7 +2244,7 @@ class Service(object):
         running_names = self._get_running_service_container_names()
         running_containers = []
         for container in self.containers:
-            if container.name in running_names:
+            if container.docker_container_id in running_names:
                 running_containers.append(container)
         return running_containers
 
@@ -2319,6 +2327,25 @@ class Service(object):
         """
         results = []
 
+        # Get running names to find out actually existing containers:
+        running_names = self._get_running_service_container_names()
+
+        def add_container_type(name, image_name, container_name):
+            for running_name in running_names:
+                running_base = running_name.rpartition("_")[0]
+                if name.default_container_name == running_base or\
+                        name.default_container_name + "_run" == running_base:
+                    results.append(ServiceContainer(
+                        self.name, self.service_path,
+                        container_name,
+                        image_name=image_name,
+                        special_container_id=running_name))
+                    return
+            ServiceContainer(
+                self.name, self.service_path,
+                container_name,
+                image_name=image_name)
+
         # Assemble results:
         yml = DockerComposeYml(self.service_path)
         for container_name in yml.services:
@@ -2329,15 +2356,10 @@ class Service(object):
                 if property_name == "image":
                     # This container is constructed from an image:
                     image_name = value
-                    results.append(ServiceContainer(
-                        self.name, self.service_path,
-                        container_name,
-                        image_name=image_name))
+                    add_container_type(name, image_name, container_name)
                 elif property_name == "build":
                     # Built from a directory with Dockerfile:
-                    results.append(ServiceContainer(
-                        self.name, self.service_path,
-                        container_name))
+                    add_container_type(name, None, container_name)
         return results
 
 class FailedLaunchTracker(object):
