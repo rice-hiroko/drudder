@@ -2347,10 +2347,10 @@ class Service(object):
                         image_name=image_name,
                         special_container_id=running_name))
                     return
-            ServiceContainer(
+            results.append(ServiceContainer(
                 self.name, self.service_path,
                 container_name,
-                image_name=image_name)
+                image_name=image_name))
 
         # Assemble results:
         yml = DockerComposeYml(self.service_path)
