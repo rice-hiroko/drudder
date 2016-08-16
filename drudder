@@ -2106,11 +2106,35 @@ class Service(object):
             back the full unshortened name.
         """
         assert(container_name != None)
+        # Check if a container name matches fully:
         for container in self.containers:
             if container.current_running_instance_name == container_name \
                     or container.default_container_name == container_name:
                 return container.name
+
+        # Check if this matches a common name pattern:
         matched_name = None
+        for container in self.containers:
+            def is_int(v):
+                try:
+                    dat_int = int(v)
+                except (TypeError, ValueError):
+                    return False
+                return True
+            name = container.default_container_name
+            if not name.endswith("_1"):
+                continue
+            name_base = name[:len("1")]
+            if container_name.startswith (name_base + "run_"):
+                ending = container_name[len(name_base + "run_"):]
+                if is_int(ending):
+                    return container_name
+            elif container_name.startswith (name_base):
+                ending = container_name[len(name_base):]
+                if is_int(ending):
+                    return container_name 
+
+        # Check for whether a container starts with this name:
         for container in self.containers:
             if container.current_running_instance_name.startswith(
                     container_name):
