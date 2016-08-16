@@ -2066,6 +2066,11 @@ class Service(object):
                 result.add(container)
         return list(result)
 
+    def default_container_name(self, subservice):
+        fpath = os.path.normpath(os.path.abspath(self.service_path))
+        return (os.path.basename(fpath).replace("-", "").replace(".", "")
+            + "_" + str(subservice) + "_1")
+
     @staticmethod
     def all():
         """ Get a global list of all detected services.
@@ -2339,8 +2344,10 @@ class Service(object):
         def add_container_type(container_name, image_name=None):
             for running_name in running_names:
                 running_base = running_name.rpartition("_")[0]
-                if name.default_container_name == running_base or\
-                        name.default_container_name + "_run" == running_base:
+                if (self.default_container_name(container_name) ==
+                        running_base or
+                        self.default_container_name(container_name)
+                            + "_run" == running_base):
                     results.append(ServiceContainer(
                         self.name, self.service_path,
                         container_name,
