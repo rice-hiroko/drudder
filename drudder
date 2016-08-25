@@ -259,7 +259,8 @@ class SubprocessHelper(object):
     @staticmethod
     def _check_output_extended(cmd, shell=False, stdout=None,
             stderr=None, cwd=None, env=None, pty=False, write_function=None,
-            copy_to_regular_stdout_stderr=True):
+            copy_to_regular_stdout_stderr=True,
+            process_handle_callback=None):
         # Get actual stdout/stderr as to be used internally:
         actual_stdout = stdout
         if stdout == None or stdout == sys.stderr:
@@ -288,6 +289,8 @@ class SubprocessHelper(object):
                 shell=shell,
                 stdout=actual_stdout, stderr=actual_stderr,
                 cwd=cwd, env=env)
+        if process_handle_callback != None:
+            process_handle_callback(process)
 
         # Output reader thread definition:
         class OutputReader(threading.Thread):
