@@ -1513,7 +1513,7 @@ class DockerComposeYml(object):
                                 ["services"][container]
             else:
                 if isinstance(self.parsed_obj, dict) and \
-                        container in self.parsed_obj:
+                        service in self.parsed_obj:
                     if isinstance(self.parsed_obj[service], dict):
                         self._desired_data = self.parsed_obj[service]
 
@@ -1724,14 +1724,15 @@ class ServiceDependency(object):
     """ This class holds the info describing the dependency to another
         service's container.
     """
-    def __init__(self, other_service_name, other_service_path,
-            other_service_container_name):
+    def __init__(self, other_service_name,
+            other_group_name,
+            other_group_dir):
         self.service_name = other_service_name
-        self.service_path = other_service_path
-        self.container_name = other_service_container_name
+        self.group_name = other_group_name
+        self.group_dir = other_group_dir
 
     @property
-    def container(self):
+    def service(self):
         """ The actual container instance to start/stop the container which
             is the target of this dependency.
 
@@ -1742,13 +1743,14 @@ class ServiceDependency(object):
         if self.service_name == None:
             raise ValueError("the service that provides this dependency " +\
                 "isn't known")
-        return ServiceContainer(self.service_name, self.service_path,
-            self.container_name)
+        return Service(
+            self.service_name, self.group_name,
+            self.group_dir)
 
     def __repr__(self):
-        if self.service_name != None:
-            return self.service_name + "/" + self.container_name
-        return self.container_name + " (unknown service!!)"
+        if self.group_name != None:
+            return self.group_name + "/" + self.service_name
+        return self.service_name + " (unknown service group!!)"
 
 class ServiceContainer(object):
     """ An instance of this class holds the info for a service's container.
@@ -1971,54 +1973,19 @@ class ServiceContainer(object):
         """
         return self._get_volumes(rw_only=True)
 
-    @property
-    def dependencies(self):
-        # Collect all external_links and links container references:
-        external_links = self.service._external_docker_compose_links(
-            self.name)
-        internal_links = self.service._internal_docker_compose_links(
-            self.name)
-        dependencies = []
-
-        # Go through all external links
-        for link in external_links:
-            link_name = link.partition(":")[0]
-            target_found = False
-            # See if we can find the target service:
-            for service in Service.all():
-                for container in service.containers:
-                    if (service == self.service and 
-                            link_name == container.name) or \
-                            link_name == container.default_container_id:
-                        target_found = True
-                        dependencies.append(ServiceDependency(
-                            service.name, service.service_path,
-                            container.name))
-            if not target_found:
-                dependencies.append(ServiceDependency(
-                    None, None, link_name))
-
-        # Go through all internal links:
-        for link in internal_links:
-            link_name = link.partition(":")[0]
-            target_found = False
-            # See if we can find the target service:
-            for container in self.service.containers:
-                 if link_name == container.name:
-                    target_found = True
-                    dependencies.append(ServiceDependency(
-                        self.service_name, self.service_path,
-                        container.name))
-            if not target_found:
-                dependencies.append(ServiceDependency(
-                    None, None, link_name))
-        return dependencies
-
 class Service(object):
     def __init__(self, service_name, group_name, group_dir):
         self.name = service_name
         self.group_name = group_name
         self.group_dir = group_dir
+
+    @staticmethod
+    def all():
+        result = set()
+        for group in ServiceGroup.all():
+            for service in group.services:
+                result.add(service)
+        return result
 
     @property
     def group(self):
@@ -2197,6 +2164,48 @@ class Service(object):
             for line in yml.data["volumes"]:
                 parse_volume_line(line.split(":"))
         return volumes
+
+    @property
+    def dependencies(self):
+        # Collect all external_links and links container references:
+        external_links = self.group._external_docker_compose_links(
+            self.name)
+        internal_links = self.group._internal_docker_compose_links(
+            self.name)
+        dependencies = []
+
+        # Go through all external links
+        for link in external_links:
+            link_name = link.partition(":")[0]
+            target_found = False
+            # See if we can find the target service:
+            for service_group in ServiceGroup.all():
+                for service in service_group.services:
+                    if service.default_container_id == link_name:
+                        target_found = True
+                        dependencies.append(ServiceDependency(
+                            service.name,
+                            service.group.name,
+                            service.group.group_dir))
+            if not target_found:
+                dependencies.append(ServiceDependency(
+                    link_name, None, None))
+
+        # Go through all internal links:
+        for link in internal_links:
+            link_name = link.partition(":")[0]
+            target_found = False
+            # See if we can find the target service:
+            for service in self.group.services:
+                 if link_name == service.name:
+                    target_found = True
+                    dependencies.append(ServiceDependency(
+                        link_name, self.group_name,
+                        self.group_dir))
+            if not target_found:
+                dependencies.append(ServiceDependency(
+                    link_name, None, None))
+        return dependencies
 
 class ServiceGroup(object):
     """ This class holds all the info and helper functionality for managing
@@ -2428,7 +2437,7 @@ class ServiceGroup(object):
         links = []
 
         # Get docker-compose.yml data:
-        yml = DockerComposeYml(self.service_path, service_name)
+        yml = DockerComposeYml(self.group_dir, service_name)
         if yml.data == None:
             raise ValueError("no such service found: " +\
                 str(container_name))
@@ -2444,7 +2453,7 @@ class ServiceGroup(object):
             links used by a service from the respective docker-compose.yml.
         """
         external_links = []
-        yml = DockerComposeYml(self.service_path, service_name)
+        yml = DockerComposeYml(self.group_dir, service_name)
         if yml.data == None:
             raise ValueError("no such service found: " +\
                 str(container_name))
@@ -3454,24 +3463,24 @@ class DoAlongDependencyEdges(object):
 
         It constructs a subgraph according to the following rules:
 
-        - the graph will be made of the specified initial_containers list,
+        - the graph will be made of the specified initial_services list,
           and then gradually grown along all the outgoing edges or,
           alternatively with along_incoming=True, along all the incoming
           edges to the maximum extent
 
-        You can then yield containers in this subgraph in the partial order
+        You can then yield services in this subgraph in the partial order
         laid out by the connections it was grown along, starting with the root
         nodes, then their children, etc.
 
-        This allows you to apply a function to all yielded containers in
+        This allows you to apply a function to all yielded services in
         order, e.g. launching them.
 
-        See the iterators DoAlongDependencyEdges.unprocessed_containers() or
-        DoAlongDependencyEdges.failed_containers() for details on how the
-        containers of this subgraph can be yielded.
+        See the iterators DoAlongDependencyEdges.unprocessed_services() or
+        DoAlongDependencyEdges.failed_services() for details on how the
+        services of this subgraph can be yielded.
     """
     def __init__(self, dependency_resolution_object,
-            initial_containers,
+            initial_services,
             along_incoming=False, expand_initial_set=True,
             reverse_yield_order=False):
         self.access_lock = threading.Lock()
@@ -3479,10 +3488,10 @@ class DoAlongDependencyEdges(object):
         self.expand_initial_set = expand_initial_set
         self.along_incoming = along_incoming
         self.graph = dependency_resolution_object.graph
-        self.containers = initial_containers
+        self.services = initial_services
         self.start_set = set()
-        for container in initial_containers:
-            self.start_set.add(self.graph[container])
+        for service in initial_services:
+            self.start_set.add(self.graph[service])
         self.marked_done = set()
         self.marked_failed = set()
         self.yielded_nodes = set()
@@ -3492,9 +3501,9 @@ class DoAlongDependencyEdges(object):
         # Grow to the relevant subgraph which can be possibly returned:
         expand_queue = queue.Queue()
         self.subgraph = {}
-        for container in initial_containers: # queue up initial containers
-            self.subgraph[container] = self.graph[container]
-            expand_queue.put(self.subgraph[container])
+        for service in initial_services: # queue up initial services
+            self.subgraph[service] = self.graph[service]
+            expand_queue.put(self.subgraph[service])
         if expand_initial_set:
             while not expand_queue.empty(): # crawl through graph and grow it
                 expand_node = expand_queue.get()
@@ -3504,8 +3513,8 @@ class DoAlongDependencyEdges(object):
                 else:
                     expanded_nodes = expand_node.outgoing_links
                 for expanded_node in expanded_nodes:
-                    if not expanded_node.container in self.subgraph:
-                        self.subgraph[expanded_node.container] = expanded_node
+                    if not expanded_node.service in self.subgraph:
+                        self.subgraph[expanded_node.service] = expanded_node
                         expand_queue.put(expanded_node)
 
     def __iter__(self):
@@ -3586,7 +3595,7 @@ class DoAlongDependencyEdges(object):
                 predecessors = get_predecessors(next_node)
                 reachable = True
                 for predecessor in predecessors:
-                    if not predecessor.container in self.subgraph:
+                    if not predecessor.service in self.subgraph:
                         continue
                     if not predecessor in self.marked_done:
                         # Nope, at least one predecessor isn't done yet.
@@ -3604,7 +3613,7 @@ class DoAlongDependencyEdges(object):
                 if not next_node in self.marked_failed:
                     # It's a succeeded node, therefore look at the successors:
                     for successor in get_successors(next_node):
-                        if not successor.container in self.subgraph:
+                        if not successor.service in self.subgraph:
                             continue
                         if not successor in seen:
                             seen.add(successor)
@@ -3613,23 +3622,23 @@ class DoAlongDependencyEdges(object):
         # Return assembled candidates:
         return candidates
 
-    def mark_success(self, container):
-        """ Mark a container as succeeded. This opens up all the direct
-            dependencies of this container to be returned from
-            unprocessed_containers() as next unprocessed containers to be
+    def mark_success(self, service):
+        """ Mark a service as succeeded. This opens up all the direct
+            dependencies of this service to be returned from
+            unprocessed_services() as next unprocessed services to be
             taken care of.
         """
         self.access_lock.acquire()
-        self.marked_done.add(self.graph[container])
+        self.marked_done.add(self.graph[service])
         self.access_lock.release()
 
-    def mark_failure(self, container):
-        """ Mark a container as failed. No container depending on this one
-            will be considered for yielding for unprocessed_containers()
+    def mark_failure(self, service):
+        """ Mark a service as failed. No service depending on this one
+            will be considered for yielding for unprocessed_services()
             anymore.
         """
         self.access_lock.acquire()
-        self.marked_failed.add(self.graph[container])
+        self.marked_failed.add(self.graph[service])
         self.access_lock.release()
 
     def _next_unprocessed_node(self):
@@ -3639,7 +3648,7 @@ class DoAlongDependencyEdges(object):
             
             Calling this function continuously will gradually yield all
             unprocessed nodes that are obtainable (see
-            unprocessed_containers() for details), and None if there is
+            unprocessed_services() for details), and None if there is
             currently no unprocessed node that can be returned.
         """
 
@@ -3702,7 +3711,7 @@ class DoAlongDependencyEdges(object):
         self.access_lock.release()
         return result
 
-    def unprocessed_containers(self):
+    def unprocessed_services(self):
         """ This function returns an iterator which yields the items according
             to the order specified in the DoAlongDependencyEdges class
             description.
@@ -3710,16 +3719,16 @@ class DoAlongDependencyEdges(object):
             However, it introduces two additional criteria (while maintaing
             the order implicated by the subgraph):
 
-            - a container can only be yielded as soon as all the direct
+            - a service can only be yielded as soon as all the direct
               predecessors are marked as "succeeded" with mark_success().
 
-            - all containers where any direct or indirect predecessors were
+            - all services where any direct or indirect predecessors were
               marked as "failed" with mark_failure() will be ignored and not
               yielded at all.
 
-            If containers cannot be yielded because the first criterion
+            If services cannot be yielded because the first criterion
             isn't fulfilled and they weren't discarded through the second
-            criterion yet and if all containers that could have been yielded
+            criterion yet and if all services that could have been yielded
             so far have been yielded, the iterator will hang and wait for
             this situation to be resolved through further mark_success()/
             mark_failure() calls.
@@ -3754,24 +3763,24 @@ class DoAlongDependencyEdges(object):
                     # Make sure we only expand beyond initial set if we were
                     # supposed to do that:
                     if not self.doalongobj.expand_initial_set and \
-                            not node.container in self.doalongobj.containers:
+                            not node.service in self.doalongobj.services:
                         # Skip this, it would expand beyond initial set.
                         skipped = True
                         continue
                     break
-                return node.container
+                return node.service
         return UnprocessedContainersIterator(self)
 
-    def failed_containers(self):
-        """ This function returns an iterator which yields containers
+    def failed_services(self):
+        """ This function returns an iterator which yields services
             in no particular order which fulfill the following criterion:
 
-            - containers which have been marked as "failed" or where any
+            - services which have been marked as "failed" or where any
               direct or indirect predecessors were marked as "failed" with
               mark_failure() will be yielded
 
-            If containers have neither met by this criterion, nor been marked
-            as succeeded and if all containers that could have been yielded so
+            If services have neither met by this criterion, nor been marked
+            as succeeded and if all services that could have been yielded so
             far have been yielded already, this iterator will hang and wait
             for this situation to be resolved through further mark_success()/
             mark_failure() calls.
@@ -3784,48 +3793,48 @@ class DoAlongDependencyEdges(object):
         raise NotImplementedError("not implemented at this point")
 
 class ContainerLinkDependencyResolution(object):
-    """ This class builds a graph based on the container.dependencies (which
-        are themselves constructed from the docker links of each container).
+    """ This class builds a graph based on the service.dependencies (which
+        are themselves constructed from the docker links of each service).
 
         This graph can then be used with DoAlongDependencyEdges to do things
         according to the dependency order.
     """
-    def __init__(self, containers):
-        self.containers = containers
+    def __init__(self, services):
+        self.services = services
         self.graph = dict()
 
-        # Add all containers as nodes without arcs:
-        for container in self.containers:
-            if not container in self.graph:
-                self.graph[container] = ContainerLinkDependencyNode(
-                    container, [], [], self.graph)
+        # Add all services as nodes without arcs:
+        for service in self.services:
+            if not service in self.graph:
+                self.graph[service] = ContainerLinkDependencyNode(
+                    service, [], [], self.graph)
 
-        # Go through containers again and add arcs:
+        # Go through services again and add arcs:
         node_added = True
         while node_added:
             node_added = False
-            for container in self.containers:
-                source_node = self.graph[container]
-                for dependency in container.dependencies:
-                    dep_container = None
+            for service in self.services:
+                source_node = self.graph[service]
+                for dependency in service.dependencies:
+                    dep_service = None
                     try:
-                        dep_container = dependency.container
+                        dep_service = dependency.service
                     except ValueError:
                         print("drudder: error: dependency for " +\
-                            str(container) + " is not in known services, " +\
+                            str(service) + " is not in known services, " +\
                             "can't resolve dependency chain: " +\
                             str(dependency), file=sys.stderr)
                         sys.exit(1)
 
                     # Make sure the target for our new arc is in the graph:
-                    if not dep_container in self.graph:
-                        self.graph[dep_container] = \
+                    if not dep_service in self.graph:
+                        self.graph[dep_service] = \
                             ContainerLinkDependencyNode(
-                            dep_container, [], [], self.graph)
+                            dep_service, [], [], self.graph)
                         node_added = True
 
                     # Obtain target node ref:
-                    target_node = self.graph[dep_container]
+                    target_node = self.graph[dep_service]
 
                     # Add arcs in both directions, if any is missing:
                     if not target_node in source_node.incoming_links:
@@ -3839,16 +3848,16 @@ class ContainerLinkDependencyResolution(object):
     def print_graph_debug(self):
         print("Graph:")
         seen = set()
-        for container in self.graph:
-            node = self.graph[container]
+        for service in self.graph:
+            node = self.graph[service]
             for outgoing in node.outgoing_links:
                 assert(node in outgoing.incoming_links)
-                print(str(node.container) + " -> " + str(outgoing.container))
-                seen.add(node.container)
-                seen.add(outgoing.container)
-        for container in self.graph:
-            if not container in seen:    
-                print(str(container))
+                print(str(node.service) + " -> " + str(outgoing.service))
+                seen.add(node.service)
+                seen.add(outgoing.service)
+        for service in self.graph:
+            if not service in seen:    
+                print(str(service))
         print("End of Graph.")
 
 class ContainerStatusInfo(object):
@@ -4142,33 +4151,49 @@ def main():
             print("drudder: error: please specify the name " + \
                 "of the service to be started, or \"all\"", file=sys.stderr)
             sys.exit(1)
-        containers = TargetsParser.get_services(" ".join(args.argument),
+        services = TargetsParser.get_services(" ".join(args.argument),
             print_error=True)
-        if containers == None:
+        if services == None:
             sys.exit(1)
-        if len(containers) == 0:
+        if len(services) == 0:
             sys.exit(0)
 
+        # Create a dependency resolution graph which we use for partial
+        # order dependency resolution for parallel launches:
         resolution = ContainerLinkDependencyResolution(
-            Service.all_containers())
+            Service.all())
 
+        # Create a launch tracker used later for parallel launches:
         tracker = FailedLaunchTracker()
         scheduled_action = "restart"
         if args.action == "start":
             scheduled_action = "start"
 
-        # Stop all indirect dependencies and the containers themselves:
         restart_dependencies = set()
         if scheduled_action == "restart":
+            # Rebuild services to be restarted, and stop all services to be
+            # restarted including their indirect dependencies:
+
+            # Create a graph traversal helper:
             unreversed_stop_before_restart = \
-                DoAlongDependencyEdges(resolution, containers,
+                DoAlongDependencyEdges(resolution, services,
                 along_incoming=True)
             stop_before_restart = []
-            for container in \
-                    unreversed_stop_before_restart.unprocessed_containers():
-                stop_before_restart.append(container)
-                unreversed_stop_before_restart.mark_success(container)
+
+            # Collect all indirect dependencies that need to be stopped:
+            # (starts out with restart container set, and grows gradually
+            # outwards to outer indirect dependencies)
+            for service in \
+                    unreversed_stop_before_restart.unprocessed_services():
+                stop_before_restart.append(service)
+                unreversed_stop_before_restart.mark_success(service)
+
+            # Reverse list so we have the "most outer" services first:
             stop_before_restart = list(reversed(stop_before_restart))
+
+            # Rebuild all containers of our core restart group
+
+            # Do the stopping:
             for container in stop_before_restart:
                 if not container in containers:
                     print_msg("stopping... " +\
