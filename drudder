@@ -1758,7 +1758,6 @@ class ServiceContainer(object):
         self.service_name = service_name
         self.group_name = group_name
         self.group_dir = group_dir
-        self._known_image_name = image_name
 
     def __repr__(self):
         return self.container_id
@@ -2088,6 +2087,7 @@ class Service(object):
         return len(self.group._get_running_service_container_names(
             self.name)) > 0
 
+    @property
     def containers(self):
         container_instance_ids = set()
 
@@ -2103,7 +2103,12 @@ class Service(object):
             self.default_container_id]))
 
         # Convert to proper ServiceContainer classes:
-        AIOjrieoajAOIe
+        result = set()
+        for cid in container_ids:
+            container = ServiceContainer(cid,
+                self.name, self.group_name, self.group_dir)
+            result.add(container)
+        return result
 
     def get_running_containers(self):
         """ Get only the containers of this service which are currently up and
@@ -2196,7 +2201,7 @@ class ServiceGroup(object):
         2.) is located inside a global service group directory (usually /srv/)
     """
     def __init__(self, group_name, group_dir):
-        self.name = service_name
+        self.name = group_name
         self.group_dir = group_dir
 
     def __repr__(self):
@@ -2300,7 +2305,7 @@ class ServiceGroup(object):
                 except (TypeError, ValueError):
                     return False
                 return True
-            default_id = container.default_container_id
+            default_id = service.default_container_id
             assert(default_id.endswith("_1"))
             id_base = default_id[:-len("1")]
             if container_id.startswith(id_base + "run_"):
@@ -2317,8 +2322,8 @@ class ServiceGroup(object):
         for service in self.services:
             if service.default_container_id.startswith(
                         container_id) or \
-                    service.default_container_id[:-len("1")] +\
-                        "_run_".startswith(
+                    (service.default_container_id[:-len("1")] +\
+                        "_run_").startswith(
                         container_id):
                 if matched_id != None:
                     return None  # not unique.
@@ -2338,7 +2343,7 @@ class ServiceGroup(object):
             env["COLUMNS"] = "200"
             output = execution_cache.check_output_with_isolated_pty([
                 SystemInfo.docker_compose_path(), "ps"],
-                cwd=self.service_path, stderr=subprocess.STDOUT,
+                cwd=self.group_dir, stderr=subprocess.STDOUT,
                 timeout=10, env=env).\
                 decode("utf-8", "ignore")
         except subprocess.CalledProcessError as e:
@@ -2507,14 +2512,15 @@ class ServiceGroup(object):
             subprocess.check_output([SystemInfo.docker_path(),
                 "volume", "rm", vol])
 
+    @property
     def services(self):
         """ Get all services that are part of this services group as
             specified in the group's docker-compose.yml.
         """
-        results = []
+        results = set()
 
         # Assemble results:
-        yml = DockerComposeYml(self.service_path)
+        yml = DockerComposeYml(self.group_dir)
         for service_name in yml.services:
             results.add(Service(service_name,
                 self.name, self.group_dir))
@@ -2856,7 +2862,7 @@ class Snapshots(object):
             needs btrfs subvolume conversion. Print a warning if not.
         """
         fs = SystemInfo.filesystem_type_at_path(
-            self.service.service_path)
+            self.group.group_dir)
         if fs != "btrfs":
             return False
 
@@ -3979,28 +3985,37 @@ def main():
     # --- Main handling of actions here:
 
     if args.action == "list":
-        all_services = Service.all()
-        print("\033[1mService list (" + str(len(all_services)) +\
-            " service(s)):\033[0m")
-        for service in all_services:
+        all_groups = ServiceGroup.all()
+        print("\033[1mService Group list (" + str(len(all_groups)) +\
+            " group(s)):\033[0m")
+        for group in all_groups:
             state = ""
-            running_names = service._get_running_service_container_names()
-            all_names = [container.name for container in service.containers]
-            if len(all_names) == 0:
-                state = "\033[1;33mservice has no containers" +\
+            running_services = []
+            stopped_services = []
+            for service in group.services:
+                containers = [container for container in service.containers]
+                running_containers = [container for container in containers if \
+                    container.running]
+                if len(running_containers) > 0:
+                    running_services.append(service)
+                else:
+                    stopped_services.append(service)
+            if len(running_services) + len(stopped_services) == 0:
+                state = "\033[1;33mgroup has no services" +\
                     "\033[0m"
-            elif len([container for container in service.containers\
-                    if not container.running]) == 0:
+            elif len(stopped_services) == 0:
                 state = "\033[1;32mrunning\033[0m"
-            elif len(running_names) > 0:
-                state = "\033[1;33mpartial (running: " +\
-                    ", ".join(running_names) + ", not running: " +\
-                    ", ".join([name for name in all_names\
-                        if name not in running_names]) + ")\033[0m"
+            elif len(running_services) > 0:
+                state = "\033[1;33mpartial (running services: " +\
+                    ", ".join([service.name for service in \
+                        running_services]) +\
+                    ", stopped services: " +\
+                    ", ".join([service.name for service in \
+                        stopped_services]) + ")\033[0m"
             else:
                 state = "\033[1;31mstopped\033[0m"
-            print("\033[0m  - \033[1m" + service.name + "\033[0m (" + \
-                service.service_path + "): " + state)
+            print("\033[0m  - \033[1m" + group.name + "\033[0m (" + \
+                group.group_dir + "): " + state)
     elif args.action == "help":
         parser.print_help()
         sys.exit(1)
