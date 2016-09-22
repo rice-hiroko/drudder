@@ -1534,7 +1534,8 @@ class DockerComposeYml(object):
             return copy.copy(self.parsed_obj)
         return dict()
 
-def print_msg(text, service=None, container=None, color="blue"):
+def print_msg(text, group=None,
+        service=None, container=None, color="blue"):
     """ Print out a nicely formatted message prefixed with
         [drudder] and/or possibly a service or container name.
 
@@ -1564,10 +1565,12 @@ def print_msg(text, service=None, container=None, color="blue"):
         return part + "m"
 
     service_part = ""
-    if service != None and len(service) > 0:
-        service_part = "\033[0m" + color_code() + service
-        if container != None:
-            service_part = service_part + "/" + container
+    if group != None and len(group) > 0:
+        service_part = "\033[0m" + color_code() + group
+        if service != None:
+            service_part += "/" + service
+            if container != None:
+                service_part += "/" + container
 
     docker_services_part = ""
     if service == None or len(service) == 0:
@@ -2083,9 +2086,10 @@ class Service(object):
         return (os.path.basename(fpath).replace("-", "").replace(".", "")
             + "_" + str(self.name) + "_1")
 
-    def is_running(self):
+    @property
+    def running(self):
         return len(self.group._get_running_service_container_names(
-            self.name)) > 0
+            self)) > 0
 
     @property
     def containers(self):
@@ -2110,12 +2114,13 @@ class Service(object):
             result.add(container)
         return result
 
-    def get_running_containers(self):
+    @property
+    def running_containers(self):
         """ Get only the containers of this service which are currently up and
             running.
         """
         running_names = self.group._get_running_service_container_names(
-            self.name)
+            self)
         running_containers = []
         for container in self.containers:
             if container.container_id in running_names:
@@ -3270,7 +3275,7 @@ class TargetsParser(object):
         return targets.strip().split(" ")
 
     @staticmethod
-    def get_containers(targets, print_error=False):
+    def get_services(targets, print_error=False):
         while targets.find("  ") >= 0:
             targets.replace("  ", " ")
         result = set()
@@ -3288,61 +3293,62 @@ class TargetsParser(object):
 
             # Specific treatment of the "all" keyword:
             if target == "all":
-                for service in Service.all():
-                    for container in service.containers:
+                for group in ServiceGroup.all():
+                    for service in group.services:
                         if not negated:
-                            result.add(container)
+                            result.add(service)
                         else:
                             try:
-                                result.remove(container)
+                                result.remove(service)
                             except KeyError:
                                 pass
                 continue
 
-            # Examine the current service/container entry:
-            service_name = target.partition("/")[0]
-            service = Service.find_by_name(service_name)
-            if service == None:
+            # Examine the current group[/service] entry:
+            group_name = target.partition("/")[0]
+            group = ServiceGroup.find_by_name(group_name)
+            if group == None:
                 if print_error:
                     print("drudder: error: " + \
-                        "no such service found: " + str(service_name),
+                        "no such service group found: " +\
+                        str(group_name),
                         file=sys.stderr)
                 return None
 
-            # See if a specific container is specified or jst all of them:
-            container_name = target.partition("/")[2]
-            if len(container_name) == 0: # all containers:
-                containers = service.containers
-                if len(containers) == 0:
-                    print_msg("warning: specified service has no " +\
-                        "containers", color="yellow", service=service.name)
-            else: # a specific container. find it by name:
-                containers = []
-                for service_container in service.containers:
-                    if service_container.name == container_name:
-                        containers.append(service_container)
+            # See if a specific service is specified, or just all of them:
+            service_name = target.partition("/")[2]
+            if len(service_name) == 0: # all services:
+                services = group.services
+                if len(services) == 0:
+                    print_msg("warning: specified group has no " +\
+                        "services", color="yellow", group=group.name)
+            else: # a specific service. find it by name:
+                services = []
+                for service in group.services:
+                    if service.name == service_name:
+                        services.append(service)
                 # Check if the container was found by name or not:
-                if len(containers) == 0:
+                if len(services) == 0:
                     if print_error:
                         print("drudder: error: " + \
-                            "no such container for service \"" +\
-                            str(service_name) + "\" found: " +\
-                            str(container_name),
+                            "no such service in group \"" +\
+                            str(group_name) + "\" found: " +\
+                            str(service_name),
                             file=sys.stderr)
                     return None
             # Add/remove all containers collected by this entry:
-            for container in containers:
+            for service in services:
                 if not negated:
-                    result.add(container)
+                    result.add(service)
                 else:
                     try:
-                        result.remove(container)
+                        result.remove(service)
                     except KeyError:
                         pass
         return list(result)
 
     @staticmethod
-    def get_services(targets, print_error=False):
+    def get_groups(targets, print_error=False):
         while targets.find("  ") >= 0:
             targets.replace("  ", " ")
         result = set()
@@ -3359,28 +3365,28 @@ class TargetsParser(object):
 
             # Specific treatment of the "all" keyword:
             if target == "all":
-                for service in Service.all():
+                for group in ServiceGroup.all():
                     if not negated:
-                        result.add(service)
+                        result.add(group)
                     else:
                         try:
-                            result.remove(service)
+                            result.remove(group)
                         except KeyError:
                             pass
                 return list(result)
-            service = Service.find_by_name(target.partition("/")[0])
-            if service == None:
+            group = ServiceGroup.find_by_name(target.partition("/")[0])
+            if group == None:
                 if print_error:
                     print("drudder: error: " + \
-                        "no such service found: " + str(
+                        "no such group found: " + str(
                         target.partition("/")[0]),
                         file=sys.stderr)
                 return None
             if not negated:
-                result.add(service)
+                result.add(group)
             else:
                 try:
-                    result.remove(service)
+                    result.remove(group)
                 except KeyError:
                     pass
         return list(result)
@@ -4030,7 +4036,7 @@ def main():
                 "of the service for which docker logs shold be printed, "+\
                 "or \"all\"", file=sys.stderr)
             sys.exit(1)
-        containers = TargetsParser.get_containers(" ".join(args.argument),
+        containers = TargetsParser.get_services(" ".join(args.argument),
             print_error=True)
         if containers == None:
             sys.exit(1)
@@ -4057,7 +4063,7 @@ def main():
                 ("" if args.action == "build" else "re") + "built",
                 file=sys.stderr)
             sys.exit(1)
-        containers = TargetsParser.get_containers(" ".join(args.argument),
+        containers = TargetsParser.get_services(" ".join(args.argument),
             print_error=True)
         if containers == None:
             sys.exit(1)
@@ -4091,48 +4097,52 @@ def main():
     elif args.action == "shell":
         if len(args.argument) == 0:
             print("drudder: error: please specify the name " + \
-                "of the service for which an interactive " +\
+                "of the group or service for which an interactive " +\
                 "shell should be started",
                 file=sys.stderr)
             sys.exit(1)
-        containers = TargetsParser.get_containers(" ".join(args.argument),
+        services = TargetsParser.get_services(" ".join(args.argument),
             print_error=True)
-        if containers == None:
+        if services == None:
             sys.exit(1)
-        if len(containers) != 1:
+        if len(services) != 1:
             print("drudder: error: this command can only be used " + \
-                "on a single container, but the given argument \"" +\
+                "on a single services, but the given argument \"" +\
                 " ".join(args.argument) +\
                 "\" matches multiple " +\
-                "containers: " +\
-                ", ".join([str(container) for container in containers]),
+                "services: " +\
+                ", ".join([str(service) for service in services]),
                 file=sys.stderr)
             sys.exit(1)
-        if containers[0].running:
-            cname = containers[0].current_running_instance_name
+        running_containers = services[0].running_containers
+        if len(running_containers) > 0:
+            containers = services[0].running_containers
+            cname = containers[0].container_id
             print_msg("attaching to running container " + str(cname),
-                service=containers[0].service.name,
+                group=services[0].group.name,
+                service=services[0].name,
                 color="blue")
             subprocess.call([SystemInfo.docker_path(), "exec", "-t", "-i",
                     str(cname), "/bin/bash"],
                 stderr=subprocess.STDOUT)
         else:
-            print_msg("launching container " + str(containers[0]) + \
-                " with shell",
-                service=containers[0].service.name,
+            print_msg("launching container for service " +
+                str(services[0].name) + " with shell",
+                group=services[0].group.name,
+                service=services[0].name,
                 color="blue")
-            image_name = containers[0].image_name
             subprocess.call([SystemInfo.docker_compose_path(), "build",
-                containers[0].name], cwd=containers[0].service.service_path)
+                services[0].name],
+                cwd=services[0].group_dir)
             subprocess.call([SystemInfo.docker_compose_path(), "run",
-                containers[0].name, "/bin/bash"],
-                cwd=containers[0].service.service_path)
+                services[0].name, "/bin/bash"],
+                cwd=services[0].group_dir)
     elif args.action == "start" or args.action == "restart":
         if len(args.argument) == 0:
             print("drudder: error: please specify the name " + \
                 "of the service to be started, or \"all\"", file=sys.stderr)
             sys.exit(1)
-        containers = TargetsParser.get_containers(" ".join(args.argument),
+        containers = TargetsParser.get_services(" ".join(args.argument),
             print_error=True)
         if containers == None:
             sys.exit(1)
@@ -4273,7 +4283,7 @@ def main():
             print("drudder: error: please specify the name " + \
                 "of the service to be stopped, or \"all\"", file=sys.stderr)
             sys.exit(1)
-        containers = TargetsParser.get_containers(" ".join(args.argument),
+        containers = TargetsParser.get_services(" ".join(args.argument),
             print_error=True)
         if containers == None:
             sys.exit(1)
@@ -4298,7 +4308,7 @@ def main():
                 "of the service to be snapshotted, or \"all\"",
                 file=sys.stderr)
             sys.exit(1)
-        services = TargetsParser.get_services(" ".join(args.argument),
+        services = TargetsParser.get_groups(" ".join(args.argument),
             print_error=True)
         return_error = False
         for service in services:
@@ -4324,7 +4334,7 @@ def main():
                 "of the service or container to print info for, " +\
                 "or \"all\"", file=sys.stderr)
             sys.exit(1)
-        containers = TargetsParser.get_containers(" ".join(args.argument),
+        containers = TargetsParser.get_services(" ".join(args.argument),
             print_error=True)
         if containers == None:
             sys.exit(1)
@@ -4432,7 +4442,7 @@ def main():
                 "of the service or container to print info for, " +\
                 "or \"all\"", file=sys.stderr)
             sys.exit(1)
-        containers = TargetsParser.get_containers(" ".join(args.argument),
+        containers = TargetsParser.get_services(" ".join(args.argument),
             print_error=True)
         if containers == None:
             sys.exit(1)
