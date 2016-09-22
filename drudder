@@ -4191,6 +4191,19 @@ def main():
         if args.action == "start":
             scheduled_action = "start"
 
+        # Rebuild all containers of our core restart group
+        for service in services:
+            print_msg("rebuilding... " +\
+                "(this service is rebuilt for a fresh " +
+                "up-to-date restart, since it was scheduled for " +
+                scheduled_action + "ing)",
+                service=service.name,
+                group=service.group.name,
+                color="blue")
+            subprocess.call([SystemInfo.docker_compose_path(), "build",
+                service.name],
+                cwd=service.group_dir)
+
         restart_dependencies = set()
         if scheduled_action == "restart":
             # Rebuild services to be restarted, and stop all services to be
@@ -4212,8 +4225,6 @@ def main():
 
             # Reverse list so we have the "most outer" services first:
             stop_before_restart = list(reversed(stop_before_restart))
-
-            # Rebuild all containers of our core restart group
 
             # Do the stopping:
             for service in stop_before_restart:
