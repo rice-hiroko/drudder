@@ -1610,9 +1610,11 @@ def print_msg(text, group=None,
     print(print_text)
 
 class DataVolumeMount(object):
-    """ This represents a docker volume mount with the known information
-        about this mount. This is used by the DataVolume class below to
-        identify the various places it is mounted on the host's disk
+    """ A DataVolumeMount represents a docker volume mount on the host fs
+        with the known information about this mount.
+
+        This is used by the DataVolume class below to represent the various
+        places the volume is mounted on the host's disk.
     """
     def __init__(self, host_path=None,
             mount_owning_service=None):
@@ -1635,20 +1637,20 @@ class DataVolume(object):
         self.known_host_mount = known_host_mount
         self.id = id
         self.name = None
-        self.owning_container = None
         self.owning_service = None
         self.container_fs_path = None
         self.specified_in_yml = False
 
     def __hash__(self):
-        return hash(str(self.id) + str(self.owning_container_path) +\
+        return hash(str(self.id) + "/" +
+            str(self.owning_service.group_dir) + "/" +
             str(self.known_host_mount))
 
     def __repr__(self):
         if self.id != None:
             return str(self.id)
-        if self.owning_container_path != None:
-            return str(self.owning_container_path)
+        if self.container_fs_path != None:
+            return str(self.container_fs_path)
         if self.known_host_mount != None:
             return str(self.known_host_mount)
         return "<DataVolume object with unknown mount and unknown id>"
@@ -1673,21 +1675,14 @@ class DataVolume(object):
                 return True
         return False
 
-    def _set_owning_container(self, container):
-        """ Set the container this volume is associated with. Only for
-            internal use. This is called for volumes that are specified as
-            host mounts in docker-compose.yml and don't have a proper
-            system-wide volume identifier/name for use in other containers.
-
-            DEVELOPER NOTE (Jonas Thiem):
-            In theory, a volume that is purely a host directory mount can be
-            used by multiple containers of course. However, right now
-            drudder only builds up volume information per container, and
-            therefore this container-centric approach is sufficient for now.
-            However, later this should be changed to allow multiple owning
-            containers.
-        """
-        self.owning_container = container
+    def is_covered_by_service_backups(self, service):
+        if self.known_host_mount == None or \
+                self.owning_service == None:
+            return None
+        base_path = os.path.normpath(self.owning_service.group_dir)
+        if os.path.normpath(self.known_host_mount).startswith(base_path):
+            return True
+        return False
 
     def _set_owning_service(self, service, container_fs_path=None):
         """ Set the service this volume is associated with. Only for
@@ -2897,40 +2892,58 @@ class Snapshots(object):
 
         self.btrfs_tool_check()
 
-        if os.path.exists(os.path.join(self.service.service_path,
-                "livedata")):
+        for service in self.group.services:
             try:
-                if not SystemInfo.is_btrfs_subvolume(os.path.join(
-                        self.service.service_path, "livedata"))\
-                        and len(self.service.rw_volumes) > 0:
-                    if self.service.is_running():
-                        if print_errors:
-                            print_msg(
-                                "the livedata/ dir of this service will " +\
-                                "still need to be converted to " +\
-                                "a subvolume to enable snapshots.\n" + \
-                                "Fix it by doing this:\n" + \
-                                "1. Stop the service with: drudder "+\
-                                    "stop " +\
-                                    self.service.name + "\n" + \
-                                "2. Snapshot the service once with: " +\
-                                    "drudder "+\
-                                    "snapshot " + self.service.name + "\n",
-                                service=self.service.name, color="yellow")
-                    else:
-                        if print_errors:
-                            print_msg("the livedata/ dir of " +\
-                                "this service still " +\
-                                "needs conversion to btrfs subvolume.\n" +\
-                                "Fix it by snapshotting it once with: " +\
-                                "drudder "+\
-                                "snapshot " + self.service.name + "\n",
-                                service=self.service.name, color="yellow")
-                    return False
-            except ValueError:
+                for volume in service.rw_volumes:
+                    if not volume.is_covered_by_service_backups(
+                            service):
+                        print_msg(
+                            "the volume " + str(volume) +
+                            " of this service won't get snapshotted, " +
+                            "because it is not mounted " +
+                            "outside of the service " +
+                            "group folder (" + self.service.group_dir + ")",
+                            service=service.name,
+                            group=self.group.name,
+                            color="yellow")
+                    elif volume.known_host_mount == None or \
+                            not SystemInfo.is_btrfs_subvolume(
+                            volume.known_host_mount):
+                        if service.running:
+                            if print_errors:
+                                print_msg(
+                                    "the volume " + str(volume) + " " +
+                                    "still needs to be converted to " +
+                                    "a subvolume to enable snapshots.\n" +
+                                    "Fix it by doing this:\n" +
+                                    "1. Stop the service with: drudder "+
+                                        "stop " +
+                                        self.group.name + "\n" +
+                                    "2. Snapshot the service once with: " +
+                                        "drudder "+
+                                        "snapshot " + self.group.name + "\n",
+                                    service=service.name,
+                                    group=self.group.name,
+                                    color="yellow")
+                        else:
+                            if print_errors:
+                                print_msg("the volume " + str(volume) + " " +
+                                    "of this service still " +
+                                    "needs conversion to a btrfs " +
+                                    "subvolume.\n" +
+                                    "Fix it by snapshotting it once with: " +
+                                    "drudder "+
+                                    "snapshot " + self.group.name + "\n",
+                                    service=service.name,
+                                    group=self.group.name,
+                                    color="yellow")
+                        return False
+            except Exception as e:
                 print_msg("there was a problem. btrfs snapshotting won't " +\
-                          "work as intended.", \
-                          service=self.service.name, color="red")
+                    "work as intended. Error details: " + str(e),
+                    service=service.name,
+                    group=self.group.name,
+                    color="red")
                 return False
         # Everything seems fine so far.
         return True
