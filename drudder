@@ -3947,37 +3947,35 @@ def main():
                     service=container.service.name,
                     container=container.name, color='yellow')
                 pass
-    elif args.action == "rebuild":
+    elif args.action == "rebuild" or args.action == "build":
         if len(args.argument) == 0:
             print("drudder: error: please specify the name " + \
-                "of the service for which an interactive shell " +\
-                "should be started",
+                "of the service which should be " +\
+                ("" if args.action == "build" else "re") + "built",
                 file=sys.stderr)
             sys.exit(1)
         containers = TargetsParser.get_containers(" ".join(args.argument),
             print_error=True)
         if containers == None:
             sys.exit(1)
-        for container in containers:
-            if container.running:
-                print_msg("cannot safely recreate container, " +\
-                    "one or more of the specified " +\
-                    "containers is/are currently running: " +\
-                    str(", ".join([
-                        str(container) for container in containers])),
-                    color="red")
-                print("drudder: error: aborted rebuilding")
-                sys.exit(1)
         some_failed = False
         for container in containers:
-            print_msg("rebuilding container with no cache",
+            print_msg(
+                "rebuilding container with no cache" if \
+                    args.action == "rebuild" else "building container",
                 service=container.service.name, container=container.name,
                 color="blue")
             try:
-                subprocess.check_call([SystemInfo.docker_compose_path(),
-                    "build",
-                    "--no-cache", "--pull", container.name],
-                    cwd=container.service.service_path)
+                if args.action == "rebuild":
+                    subprocess.check_call([SystemInfo.docker_compose_path(),
+                        "build",
+                        "--no-cache", "--pull", container.name],
+                        cwd=container.service.service_path)
+                else:
+                    subprocess.check_call([SystemInfo.docker_compose_path(),
+                        "build",
+                        container.name],
+                        cwd=container.service.service_path)
             except subprocess.CalledProcessError as e:
                 some_failed = True
                 print_msg("Build failure (exit code " +\
