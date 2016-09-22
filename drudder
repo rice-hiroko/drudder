@@ -1615,14 +1615,14 @@ class DataVolumeMount(object):
         identify the various places it is mounted on the host's disk
     """
     def __init__(self, host_path=None,
-            mount_container=None):
+            mount_owning_service=None):
         self.host_path = host_path
-        self.container = mount_container
+        self.service = mount_owning_service
 
     def __repr__(self):
         if self.host_path != None:
             return self.host_path
-        return "<unspecified volume mount of " + str(container) + ">"
+        return "<unspecified volume mount of " + str(self.service) + ">"
 
 class DataVolume(object):
     """ This specifies the known information about a data volume. A volume
@@ -1637,6 +1637,7 @@ class DataVolume(object):
         self.name = None
         self.owning_container = None
         self.owning_service = None
+        self.container_fs_path = None
         self.specified_in_yml = False
 
     def __hash__(self):
@@ -1688,7 +1689,7 @@ class DataVolume(object):
         """
         self.owning_container = container
 
-    def _set_owning_service(self, service):
+    def _set_owning_service(self, service, container_fs_path=None):
         """ Set the service this volume is associated with. Only for
             internal use. This is called for volumes that are specified as
             host mounts in docker-compose.yml and don't have a proper
@@ -1703,6 +1704,8 @@ class DataVolume(object):
             containers.
         """
         self.owning_service = service
+        if container_fs_path != None:
+            self.container_fs_path = container_fs_path
 
     @property
     def mounts(self):
@@ -1797,7 +1800,7 @@ class ServiceContainer(object):
     def potentially_lost_volumes(self):
         # Find volumes that will be dangling and not re-attached by
         # docker-compose on container recreation:
-        potentially_lost_volumes = []
+        potentially_lost_volumes = set()
         for volume in self.volumes:
             if volume.name != None and volume.specified_in_yml:
                 # Named volume specified in .yml -> we should fine
@@ -1826,7 +1829,8 @@ class ServiceContainer(object):
 
     def stop(self):
         subprocess.check_call([SystemInfo.docker_path(),
-            "stop", self.container_id], cwd=self.service.service_path)
+            "stop", self.container_id],
+            cwd=self.service.group.group_dir)
 
     @property
     def running(self):
@@ -1988,11 +1992,22 @@ class Service(object):
         return result
 
     @property
+    def potentially_lost_volumes(self):
+        result = set()
+        for containers in self.containers:
+            result.union(containers.potentially_lost_volumes)
+        return result
+
+    @property
     def group(self):
         return ServiceGroup(self.group_name, self.group_dir)
 
     def __repr__(self):
         return self.name + " service (part of " + str(self.group) + ")"
+
+    def stop(self):
+        for container in self.running_containers:
+            container.stop()
 
     def start(self, force_container_recreation=False):
         if self.running:
@@ -2007,9 +2022,9 @@ class Service(object):
                     "but container recreation was forced by user",
                     service=self.service.name, container=self.name,
                     color="yellow")
-            subprocess.check_call([SystemInfo.docker_path(),
-                "rm", "-f", self.default_container_id],
-                cwd=self.service.service_path)
+            subprocess.check_call([SystemInfo.docker_compose_path(),
+                "rm", "--all", "-f", self.name],
+                cwd=self.group.group_dir)
         else:
             for vol in potentially_lost_volumes:
                 print_msg("ONLY LIMITED RESTART, CONTAINER WONT BE "+\
@@ -2022,7 +2037,7 @@ class Service(object):
                     container=self.name, color="yellow")
         subprocess.check_call([SystemInfo.docker_compose_path(),
             "up", "-d", self.name],
-            cwd=self.service.service_path)
+            cwd=self.group.group_dir)
 
     def __eq__(self, other):
         if not hasattr(other, "name") or not hasattr(other,
@@ -2151,7 +2166,7 @@ class Service(object):
                         parts[0].startswith("../")) \
                         and not os.path.isabs(parts[0]):
                     parts[0] = os.path.join(
-                        os.path.realpath(self.service.service_path), parts[0])
+                        os.path.realpath(self.group_dir), parts[0])
                     parts[0] = os.path.normpath(os.path.abspath(parts[0]))
 
             # Add to list:
@@ -2159,7 +2174,7 @@ class Service(object):
                 volumes.append((parts[0], parts[1]))
 
         # Extract volume lines:
-        yml = DockerComposeYml(self.service_path, self.name)
+        yml = DockerComposeYml(self.group_dir, self.name)
         if "volumes" in yml.data:
             for line in yml.data["volumes"]:
                 parse_volume_line(line.split(":"))
@@ -2568,13 +2583,13 @@ class LaunchThreaded(threading.Thread):
         thread if it takes too long.
     """
     
-    def __init__(self, container, failed_launch_tracker=None,
+    def __init__(self, service, failed_launch_tracker=None,
             force_container_recreation=False, do_on_success=None,
             do_on_failure=None):
         super().__init__()
-        self.container = container
+        self.service = service
         self.failed_launch_tracker = failed_launch_tracker
-        self.path = self.container.service.service_path
+        self.path = self.service.group.group_dir
         self.force_container_recreation = force_container_recreation
         def do_nothing(self):
             pass
@@ -2588,7 +2603,7 @@ class LaunchThreaded(threading.Thread):
     def run(self):
         try:
             # Fix permissions if we have instructions for that:
-            perms = Permissions(self.container.service)
+            perms = Permissions(self.service.group)
             perm_info = perms.get_permission_info_from_yml()
             if ("owner" in perm_info["livedata-permissions"]) \
                     and os.path.exists(os.path.join(
@@ -2612,60 +2627,60 @@ class LaunchThreaded(threading.Thread):
 
             # Get dependencies and see if they have all been launched:
             waiting_msg = False
-            for dependency in self.container.dependencies:
-                if not dependency.container.running:
+            for dependency in self.service.dependencies:
+                if not dependency.service.running:
                     if not waiting_msg:
                         waiting_msg = True
                     time.sleep(5)
-                    while not dependency.container.running:
+                    while not dependency.service.running:
                         if self.failed_launch_tracker != None:
-                            if dependency.container in \
+                            if dependency.service in \
                                     self.failed_launch_tracker:
                                 print_msg("launch aborted due to failed " +\
                                     "dependency launch: " +\
                                     str(dependency),
-                                    service=self.container.service.name,
-                                    container=self.container.name,
+                                    service=self.service.name,
+                                    group=self.service.group.name,
                                     color="red")
                                 self.failed_launch_tracker.add(
-                                    self.container)
+                                    self.service)
                                 self.do_on_failure()
                                 return
                         time.sleep(5)
 
             # Launch the service:
-            print_msg("launching...", service=self.container.service.name,
-                container=self.container.name, color="blue")
+            print_msg("launching...", service=self.service.name,
+                group=self.service.group.name, color="blue")
             try:
-                self.container.launch(
+                self.service.start(
                     force_container_recreation=\
                     self.force_container_recreation)
                 time.sleep(1)
-                if not self.container.running:
+                if not self.service.running:
                     print_msg("failed to launch. (nothing running after " +\
                         "1 second)",\
-                        service=self.container.service.name,
-                        container=self.container.name, color="red")
+                        service=self.service.name,
+                        group=self.service.group.name, color="red")
                     if self.failed_launch_tracker != None:
                         self.failed_launch_tracker.add(self.container)
                     self.do_on_failure()
                     return
                 print_msg("now running.",
-                    service=self.container.service.name,
-                    container=self.container.name, color="green")
+                    service=self.service.name,
+                    group=self.service.group.name, color="green")
                 self.do_on_success()
             except subprocess.CalledProcessError:
                 print_msg("failed to launch. (error exit code)",\
-                    service=self.container.service.name,
-                    container=self.container.name,
+                    service=self.service.name,
+                    group=self.service.group.name,
                     color="red")
                 if self.failed_launch_tracker != None:
                     self.failed_launch_tracker.add(self.container)
                 self.do_on_failure()
             except Exception as e:
                 print_msg("failed to launch. (unknown error)",\
-                    service=self.container.service.name,
-                    container=self.container.name,
+                    service=self.service.name,
+                    group=self.service.group.name,
                     color="red")
                 if self.failed_launch_tracker != None:
                     self.failed_launch_tracker.add(self.container)
@@ -2677,7 +2692,7 @@ class LaunchThreaded(threading.Thread):
             traceback.print_exc()
 
     @staticmethod
-    def attempt_launch(container, to_background_timeout=5,
+    def attempt_launch(service, to_background_timeout=5,
             failed_launch_tracker=None, force_container_recreation=False,
             do_on_success=None, do_on_failure=None):
         """ Launch a given service and wait for it to run for a few seconds.
@@ -2687,7 +2702,7 @@ class LaunchThreaded(threading.Thread):
         """
 
         # Start a new launch thread:
-        launch_t = LaunchThreaded(container,
+        launch_t = LaunchThreaded(service,
             failed_launch_tracker=failed_launch_tracker,
             do_on_success=do_on_success, do_on_failure=do_on_failure,
             force_container_recreation=force_container_recreation)
@@ -2701,10 +2716,10 @@ class LaunchThreaded(threading.Thread):
         return None
 
     @staticmethod
-    def stop(container):
+    def stop(service):
         """ Stop a service. """
-        assert(container != None)
-        container.stop()
+        assert(service != None)
+        service.stop()
 
     @staticmethod
     def wait_for_launches(threads):
@@ -3400,34 +3415,34 @@ class TargetsParser(object):
                     pass
         return list(result)
 
-class ContainerLinkDependencyNode(object):
+class ServiceLinkDependencyNode(object):
     """ A node in the dependency graph of container dependencies.
         Has incoming and outgoing link edges, and has an associated container.
     """
-    def __init__(self, container, incoming_links, outgoing_links, graph):
+    def __init__(self, service, incoming_links, outgoing_links, graph):
         self.incoming_links = incoming_links
         self.outgoing_links = outgoing_links
-        self.container = container
+        self.service = service
         self.graph = graph
 
     def __repr__(self):
-        return "<ContainerLinkDependencyNode " + str(self.container) +\
+        return "<ServiceLinkDependencyNode " + str(self.service) +\
             " (" +\
-            ", ".join([str(self.container) + " -> " + str(link.container)\
+            ", ".join([str(self.service) + " -> " + str(link.service)\
                 for link in self.outgoing_links]) + ")>"
 
     def __hash__(self):
-        return hash(str(self.container.name))
+        return hash(self.__repr__())
 
     def __eq__(self, other):
         if other == None:
             return False
-        if not hasattr(other, "container") or \
+        if not hasattr(other, "service") or \
                 not hasattr(other, "incoming_links") or \
                 not hasattr(other, "outgoing_links") or \
                 not hasattr(other, "graph"):
             return False
-        if other.container == self.container:
+        if other.service == self.service:
             if other.graph != self.graph:
                 return False
             return True
@@ -3436,22 +3451,22 @@ class ContainerLinkDependencyNode(object):
     def __neq__(self, other):
         return not self.__eq__(other)
 
-    def fulfills_dependencies(self, containers):
-        nodes = [self.graph[container] for container in running_containers]
+    def fulfills_dependencies(self, services):
+        nodes = [self.graph[service] for service in services]
         for outgoing_link in self.outgoing_links:
             if not outgoing_link in nodes:
                 return False
         return True
 
-    def is_depending_on(self, containers):
-        nodes = [self.graph[container] for container in running_containers]
+    def is_depending_on(self, services):
+        nodes = [self.graph[service] for service in services]
         for outgoing_link in self.outgoing_links:
             if outgoing_link in nodes:
                 return True
         return False
 
-    def is_dependency_of(self, containers):
-        nodes = [self.graph[container] for container in running_containers]
+    def is_dependency_of(self, services):
+        nodes = [self.graph[service] for service in services]
         for incoming_link in self.outgoing_links:
             if incoming_link in nodes:
                 return True
@@ -3806,7 +3821,7 @@ class ContainerLinkDependencyResolution(object):
         # Add all services as nodes without arcs:
         for service in self.services:
             if not service in self.graph:
-                self.graph[service] = ContainerLinkDependencyNode(
+                self.graph[service] = ServiceLinkDependencyNode(
                     service, [], [], self.graph)
 
         # Go through services again and add arcs:
@@ -3829,7 +3844,7 @@ class ContainerLinkDependencyResolution(object):
                     # Make sure the target for our new arc is in the graph:
                     if not dep_service in self.graph:
                         self.graph[dep_service] = \
-                            ContainerLinkDependencyNode(
+                            ServiceLinkDependencyNode(
                             dep_service, [], [], self.graph)
                         node_added = True
 
@@ -4045,26 +4060,30 @@ def main():
                 "of the service for which docker logs shold be printed, "+\
                 "or \"all\"", file=sys.stderr)
             sys.exit(1)
-        containers = TargetsParser.get_services(" ".join(args.argument),
+        services = TargetsParser.get_services(" ".join(args.argument),
             print_error=True)
-        if containers == None:
+        if services == None:
             sys.exit(1)
-        for container in containers:
-            print_msg("printing log of container " + str(container),
-                service=container.service.name, color='blue')
-            try:
-                retcode = subprocess.call([SystemInfo.docker_path(), "logs",
-                        container.current_running_instance_name],
-                        stderr=subprocess.STDOUT)
-                if retcode != 0:
-                    raise subprocess.CalledProcessError(
-                        retcode, " ".join([SystemInfo.docker_path(), "logs"]))
-            except subprocess.CalledProcessError:
-                print_msg("failed printing logs. " +\
-                    "Maybe container has no logs yet?",
-                    service=container.service.name,
-                    container=container.name, color='yellow')
-                pass
+        for service in services:
+            for container in service.containers:
+                print_msg("printing log of container " + str(container),
+                    service=service.name,
+                    group=service.group.name, color='blue')
+                try:
+                    retcode = subprocess.call([SystemInfo.docker_path(), "logs",
+                            container.container_id],
+                            stderr=subprocess.STDOUT)
+                    if retcode != 0:
+                        raise subprocess.CalledProcessError(
+                            retcode, " ".join([SystemInfo.docker_path(),
+                            "logs", container.container_id]))
+                except subprocess.CalledProcessError:
+                    print_msg("failed printing logs. " +\
+                        "Maybe container has no logs yet?",
+                        service=service.name,
+                        group=service.group.name,
+                        color='yellow')
+                    pass
     elif args.action == "rebuild" or args.action == "build":
         if len(args.argument) == 0:
             print("drudder: error: please specify the name " + \
@@ -4072,32 +4091,35 @@ def main():
                 ("" if args.action == "build" else "re") + "built",
                 file=sys.stderr)
             sys.exit(1)
-        containers = TargetsParser.get_services(" ".join(args.argument),
+        services = TargetsParser.get_services(" ".join(args.argument),
             print_error=True)
-        if containers == None:
+        if services == None:
             sys.exit(1)
         some_failed = False
-        for container in containers:
+        for service in services:
             print_msg(
                 "rebuilding container with no cache" if \
                     args.action == "rebuild" else "building container",
-                service=container.service.name, container=container.name,
+                service=service.name,
+                group=service.group.name,
                 color="blue")
             try:
                 if args.action == "rebuild":
                     subprocess.check_call([SystemInfo.docker_compose_path(),
                         "build",
-                        "--no-cache", "--pull", container.name],
-                        cwd=container.service.service_path)
+                        "--no-cache", "--pull", service.name],
+                        cwd=service.group_dir)
                 else:
                     subprocess.check_call([SystemInfo.docker_compose_path(),
-                        "build",
-                        container.name],
-                        cwd=container.service.service_path)
+                        "build", service.name],
+                        cwd=service.group_dir)
             except subprocess.CalledProcessError as e:
                 some_failed = True
                 print_msg("Build failure (exit code " +\
-                    str(e.returncode) + ")", color="red")
+                    str(e.returncode) + ")",
+                    service=service.name,
+                    group=service.group.name,
+                    color="red")
         if some_failed:
             print_msg("Rebuilding completed with errors.", color="red")
             sys.exit(1)
@@ -4194,64 +4216,65 @@ def main():
             # Rebuild all containers of our core restart group
 
             # Do the stopping:
-            for container in stop_before_restart:
-                if not container in containers:
+            for service in stop_before_restart:
+                if not service in services:
                     print_msg("stopping... " +\
-                        "(this container is depending on 1+ " +\
-                        "of the container(s) scheduled for restart)",
-                        service=container.service.name,
-                        container=container.name,
+                        "(this service is depending on 1+ " +\
+                        "of the service(s) scheduled for restart)",
+                        service=service.name,
+                        group=service.group.name,
                         color="blue")
-                    restart_dependencies.add(container)
+                    restart_dependencies.add(service)
                 else:
                     print_msg("stopping... " +\
-                        "(this container was scheduled for " +\
+                        "(this service was scheduled for " +\
                         scheduled_action + ")",
-                        service=container.service.name,
-                        container=container.name,
+                        service=service.name,
+                        group=service.group.name,
                         color="blue")
-                LaunchThreaded.stop(container)
+                LaunchThreaded.stop(service)
 
         # Helper function to launch a service:
         threads = []
-        def start_container(container, is_last=False,
+        def start_service(service, is_last=False,
                 do_on_failure=None, do_on_success=None):
-            if container.running:
-                if container in containers:
-                    print_msg("already running. (this container was " +\
+            if service.running:
+                if service in services:
+                    print_msg("already running. (this service was " +\
                             "scheduled for " +\
                             scheduled_action + ")",
-                        service=container.service.name,\
-                        container=container.name,
+                        group=service.group.name,
+                        service=service.name,
                         color="green")
-                elif container in restart_dependencies:
+                elif service in restart_dependencies:
                     print_msg("already running. " +\
-                            "(this container was " +\
+                            "(this service was " +\
                             "an external dependency on the " +\
                             scheduled_action +\
                             "ed containers) - " +\
-                            "weird, didn't we stop it before??",
-                        service=container.service.name,\
-                        container=container.name,
+                            "weird, didn't we stop it before?? (" +
+                            "if you can reproduce this, report it)",
+                        service=service.name,
+                        group=service.group.name,
                         color="yellow")
                 else:
-                    print_msg("already running. (this container is " +\
-                            "a dependency of a container scheduled for " +\
+                    print_msg("already running. (this service is " +\
+                            "a dependency of a service scheduled for " +\
                             scheduled_action + ")",
-                        service=container.service.name,\
-                        container=container.name,
+                        service=service.name,
+                        group=service.group.name,
                         color="green")
                 if do_on_success != None:
                     do_on_success()
                 return
             if not is_last:
-                t = LaunchThreaded.attempt_launch(container,
+                t = LaunchThreaded.attempt_launch(service,
                     failed_launch_tracker=tracker,
                     force_container_recreation=(args.force is True),
                     do_on_failure=do_on_failure,
                     do_on_success=do_on_success)
             else:
-                t = LaunchThreaded.attempt_launch(container,
+                t = LaunchThreaded.attempt_launch(services,
                     failed_launch_tracker=tracker,
                     to_background_timeout=None,
                     force_container_recreation=(args.force is True),
@@ -4267,33 +4290,33 @@ def main():
             return lambda: net.mark_failure(container)
 
         # Start the dependencies of our container launch set:
-        start_dependency_containers = \
-            DoAlongDependencyEdges(resolution, containers,
+        start_dependency_services = \
+            DoAlongDependencyEdges(resolution, services,
             along_incoming=False, expand_initial_set=True,
             reverse_yield_order=True)
-        for container in start_dependency_containers.unprocessed_containers():
-            if container in containers: # not a dependency
-                start_dependency_containers.mark_success(container)
+        for service in start_dependency_services.unprocessed_services():
+            if service in services: # not a dependency
+                start_dependency_services.mark_success(service)
                 continue
             # Launch it:
-            start_container(container, is_last=False,
+            start_service(service, is_last=False,
                 do_on_failure=mark_failure_func(
-                    start_dependency_containers, container),
+                    start_dependency_services, service),
                 do_on_success=mark_success_func(
-                    start_dependency_containers, container))
+                    start_dependency_services, service))
 
         # Start everything again:
-        start_containers = \
-            DoAlongDependencyEdges(resolution, set(containers).union(\
+        start_services = \
+            DoAlongDependencyEdges(resolution, set(services).union(\
                 restart_dependencies),
                 along_incoming=False, expand_initial_set=False,
                 reverse_yield_order=True)
-        for container in start_containers.unprocessed_containers():
-            start_container(container, is_last=False,
+        for service in start_services.unprocessed_services():
+            start_service(service, is_last=False,
                 do_on_failure=mark_failure_func(
-                    start_containers, container),
+                    start_services, service),
                 do_on_success=mark_success_func(
-                    start_containers, container))
+                    start_services, service))
 
         # Wait until launches are finished:
         LaunchThreaded.wait_for_launches(threads)
