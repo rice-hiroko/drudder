@@ -4004,17 +4004,22 @@ def main():
                 state = "\033[1;33mgroup has no services" +\
                     "\033[0m"
             elif len(stopped_services) == 0:
-                state = "\033[1;32mrunning\033[0m"
+                state = "\033[1;32mall running (" +\
+                    " ".join([service.name for service in \
+                        running_services]) + ")\033[0m"
             elif len(running_services) > 0:
-                state = "\033[1;33mpartial (running services: " +\
+                state = "\033[1;33mpartial running (" +\
                     ", ".join([service.name for service in \
                         running_services]) +\
-                    ", stopped services: " +\
+                    "), others stopped (" +\
                     ", ".join([service.name for service in \
                         stopped_services]) + ")\033[0m"
             else:
-                state = "\033[1;31mstopped\033[0m"
-            print("\033[0m  - \033[1m" + group.name + "\033[0m (" + \
+                state = "\033[1;31mall stopped (" +\
+                    ", ".join([service.name for service in \
+                        stopped_services]) +\
+                        ")\033[0m"
+            print("\033[0m  - \033[1mgroup " + group.name + "\033[0m (" + \
                 group.group_dir + "): " + state)
     elif args.action == "help":
         parser.print_help()
