@@ -2657,7 +2657,7 @@ class LaunchThreaded(threading.Thread):
                         service=self.service.name,
                         group=self.service.group.name, color="red")
                     if self.failed_launch_tracker != None:
-                        self.failed_launch_tracker.add(self.container)
+                        self.failed_launch_tracker.add(self.service)
                     self.do_on_failure()
                     return
                 print_msg("now running.",
@@ -2670,7 +2670,7 @@ class LaunchThreaded(threading.Thread):
                     group=self.service.group.name,
                     color="red")
                 if self.failed_launch_tracker != None:
-                    self.failed_launch_tracker.add(self.container)
+                    self.failed_launch_tracker.add(self.service)
                 self.do_on_failure()
             except Exception as e:
                 print_msg("failed to launch. (unknown error)",\
@@ -2678,7 +2678,7 @@ class LaunchThreaded(threading.Thread):
                     group=self.service.group.name,
                     color="red")
                 if self.failed_launch_tracker != None:
-                    self.failed_launch_tracker.add(self.container)
+                    self.failed_launch_tracker.add(self.service)
                 self.do_on_failure()
                 raise e
         except Exception as e:
