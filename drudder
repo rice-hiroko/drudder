@@ -1650,6 +1650,9 @@ class DataVolume(object):
         if self.id != None:
             return str(self.id)
         if self.container_fs_path != None:
+            if self.known_host_moun != None:
+                return str(self.known_host_monut) + ":" +\
+                    str(self.container_fs_path)
             return str(self.container_fs_path)
         if self.known_host_mount != None:
             return str(self.known_host_mount)
