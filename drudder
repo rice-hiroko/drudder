@@ -2018,7 +2018,7 @@ class Service(object):
                     service=self.service.name, container=self.name,
                     color="yellow")
             subprocess.check_call([SystemInfo.docker_compose_path(),
-                "rm", "--all", "-f", self.name],
+                "rm", "-f", self.name],
                 cwd=self.group.group_dir)
         else:
             for vol in potentially_lost_volumes:
