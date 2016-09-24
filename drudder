@@ -1218,14 +1218,21 @@ class SystemInfo(object):
             were problems detecting this. May raise a ValueError if the path
             couldn't be properly examined for some reason.
         """
+        if (not os.path.exists(path) or
+                not os.path.isdir(path)) and len(path) > len(os.path.sep):
+            if path.endswith(os.path.sep):
+                path = path[:-len(os.path.sep)]
+            shorten_index = max(0, path.find(os.path.sep))
+            return SystemInfo.is_btrfs_subvolume(
+                path[:shorten_index])
+
         path = os.path.realpath(path)
         nontrivial_error = "error: failed to map a btrs subvolume "+\
             "to its POSIX path. This seems to be a non-trivial setup."+\
             " You should do your snapshotting manually!!"
 
         # First, get the containing mount point:
-        base_path = os.path.normpath(path + "/../")
-        mount = SystemInfo.get_fs_mount_root(base_path)
+        mount = SystemInfo.get_fs_mount_root(path)
         if mount == None:
             print("drudder: warning: internal problem: " +\
                 "mount point of " +\
@@ -1249,11 +1256,14 @@ class SystemInfo(object):
                     "maybe incompatible tool version? Please report this." +\
                     " Full output: " + str(output))
             line = line[line.find(" path ")+len(" path "):].strip()
-            full_path_guess = mount + line
+            full_path_guess = mount + os.path.sep + line
             if not os.path.exists(full_path_guess):
                 if line == "DELETED":
                     continue
-                print_msg(nontrivial_error, color="red")
+                print_msg(nontrivial_error + "\n\nError details: " +
+                    "btrfs full base path guess doesn't exist: " +
+                    str(full_path_guess) + " (checked upon: " +
+                    path + ")", color="red")
                 return False
             if os.path.normpath(os.path.abspath(full_path_guess)) == \
                     os.path.normpath(os.path.abspath(path)):
@@ -1682,6 +1692,13 @@ class DataVolume(object):
         if self.known_host_mount == None or \
                 self.owning_service == None:
             return None
+
+        # If path exists and is not a dir, we can't backup it:
+        if os.path.exists(self.known_host_mount) and \
+                not os.path.isdir(self.known_host_mount):
+            return False
+
+        # Check whether path is contained in our service group dir:
         base_path = os.path.normpath(self.owning_service.group_dir)
         if os.path.normpath(self.known_host_mount).startswith(base_path):
             return True
@@ -2900,15 +2917,26 @@ class Snapshots(object):
                 for volume in service.rw_volumes:
                     if not volume.is_covered_by_service_backups(
                             service):
-                        print_msg(
-                            "the volume " + str(volume) +
-                            " of this service won't get snapshotted, " +
-                            "because it is not mounted " +
-                            "outside of the service " +
-                            "group folder (" + self.service.group_dir + ")",
-                            service=service.name,
-                            group=self.group.name,
-                            color="yellow")
+                        if volume.known_host_mount != None and \
+                                os.path.exists(volume.known_host_mount) and \
+                                not os.path.isdir(volume.known_host_mount):
+                            print_msg(
+                                "the volume " + str(volume) +
+                                " of this service won't get snapshotted, " +
+                                "because it isn't a directory",
+                                service=service.name,
+                                group=self.group.name,
+                                color="yellow")
+                        else:
+                            print_msg(
+                                "the volume " + str(volume) +
+                                " of this service won't get snapshotted, " +
+                                "because it is not mounted " +
+                                "outside of the service " +
+                                "group folder (" + self.group.group_dir + ")",
+                                service=service.name,
+                                group=self.group.name,
+                                color="yellow")
                     elif volume.known_host_mount == None or \
                             not SystemInfo.is_btrfs_subvolume(
                             volume.known_host_mount):
@@ -4358,23 +4386,25 @@ def main():
             print("drudder: error: please specify the name " + \
                 "of the service to be stopped, or \"all\"", file=sys.stderr)
             sys.exit(1)
-        containers = TargetsParser.get_services(" ".join(args.argument),
+        services = TargetsParser.get_services(" ".join(args.argument),
             print_error=True)
-        if containers == None:
+        if services == None:
             sys.exit(1)
-        for container in containers:
-            assert(container != None)
-            if container.running:
-                print_msg("stopping...", service=container.service.name,
-                    container=container.name,
+        for service in services:
+            assert(service != None)
+            if service.running:
+                print_msg("stopping...",
+                    service=service.name,
+                    group=service.group.name,
                     color="blue")
-                LaunchThreaded.stop(container)
-                print_msg("stopped.", service=container.service.name,
-                    container=container.name, color="green")
+                LaunchThreaded.stop(service)
+                print_msg("stopped.",
+                    service=service.name,
+                    group=service.group.name, color="green")
             else:
                 print_msg("not currently running.",
-                    service=container.service.name,
-                    container=container.name,
+                    service=service.name,
+                    group=service.group.name,
                     color="blue")
         sys.exit(0)
     elif args.action == "snapshot":
