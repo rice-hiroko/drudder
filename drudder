@@ -4583,7 +4583,7 @@ def main():
             print(serialize(info))
         sys.exit(0)
     elif args.action == "clean":
-        Service.global_clean_up(args.force != True)
+        ServiceGroup.global_clean_up(args.force != True)
     else:
         unknown_action()
 
