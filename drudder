@@ -1265,8 +1265,12 @@ class SystemInfo(object):
                     str(full_path_guess) + " (checked upon: " +
                     path + ")", color="red")
                 return False
-            if os.path.normpath(os.path.abspath(full_path_guess)) == \
-                    os.path.normpath(os.path.abspath(path)):
+            full_path_guess = os.path.normpath(os.path.abspath(
+                full_path_guess).replace(os.path.sep + os.path.sep,
+                os.path.sep))
+            normpath = os.path.normpath(os.path.abspath(path).replace(
+                os.path.sep + os.path.sep, os.path.sep))
+            if full_path_guess == normpath:
                 try:
                     output = subprocess.check_output([
                         SystemInfo.locate_binary("stat"),
