@@ -1232,7 +1232,9 @@ class SystemInfo(object):
             " You should do your snapshotting manually!!"
 
         # First, get the containing mount point:
+        print("fs mount root query on: " + str(path))
         mount = SystemInfo.get_fs_mount_root(path)
+        print("query result: " + str(path))
         if mount == None:
             print("drudder: warning: internal problem: " +\
                 "mount point of " +\
@@ -1373,9 +1375,9 @@ class SystemInfo(object):
         skip_pos = output.find(" ")
         if skip_pos <= 0 or skip_pos >= len(output):
             raise RuntimeError("failed to parse df output")
-        output = output[skip_pos+1:].strip()
+        output = output[skip_pos+1:].strip().partition("\n")[0]
 
-        # Skip past all entries not starting with /
+        # Skip past all entries not starting with / (to get to "Mounte don")
         while True:
             fwslash = output.find("/")
             spacepos = output.find(" ")
