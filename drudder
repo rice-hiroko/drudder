@@ -1388,7 +1388,7 @@ class SystemInfo(object):
 
         if not output.startswith("/"):
             raise RuntimeError("failed to parse df output")
-        if os.path.exists(output) and os.path.isdfile(output):
+        if os.path.exists(output) and os.path.isfile(output):
             raise RuntimeError("failed to parse df output (" +
                 "searching mount path for: " + str(path) + "): " +
                 "result unexpectedly a regular file: " + str(output))
