@@ -1232,9 +1232,7 @@ class SystemInfo(object):
             " You should do your snapshotting manually!!"
 
         # First, get the containing mount point:
-        print("fs mount root query on: " + str(path))
         mount = SystemInfo.get_fs_mount_root(path)
-        print("query result: " + str(path))
         if mount == None:
             print("drudder: warning: internal problem: " +\
                 "mount point of " +\
@@ -1333,6 +1331,29 @@ class SystemInfo(object):
 
     @staticmethod
     def get_fs_mount_root(path):
+        path = SystemInfo.get_df_mounted_at(path)
+        mounts = subprocess.check_output([
+            "mount"])
+        try:
+            mounts = mounts.decode("utf-8", "replace")
+        except AttributeError:
+            pass
+        found_mount = None
+        found_mount_len = None
+        for mountl in mounts.strip().replace("\r\n", "\n").split("\n"):
+            mountl = mountl.strip()
+            if mountl.find(" on ") <= 0:
+                continue
+            mount_place = mountl.partition(" on ")[2].strip().partition(" ")[0]
+            if path.startswith(mount_place) and (
+                    found_mount == None or
+                    len(mount_place) > found_mount_len):
+                found_mount_len = len(mount_place)
+                found_mount = mount_place
+        return found_mount
+
+    @staticmethod
+    def get_df_mounted_at(path):
         """ Find out where the mount point of the filesystem is located of the
             given file path. (e.g. for a path "/home/myuser/somefile"
             located inside a home partition mounted at /home/, this would
@@ -1369,13 +1390,13 @@ class SystemInfo(object):
         # Skip first line:
         if output.find("\n") <= 0:
             raise RuntimeError("failed to parse df output")
-        output = output[output.find("\n")+1:]
+        output = output[output.find("\n")+1:].partition("\n")[0]
 
         # Skip past first entry:
         skip_pos = output.find(" ")
         if skip_pos <= 0 or skip_pos >= len(output):
             raise RuntimeError("failed to parse df output")
-        output = output[skip_pos+1:].strip().partition("\n")[0]
+        output = output[skip_pos+1:].strip()
 
         # Skip past all entries not starting with / (to get to "Mounte don")
         while True:
