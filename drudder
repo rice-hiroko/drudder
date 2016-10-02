@@ -214,7 +214,6 @@ import json
 import multiprocessing
 import os
 import platform
-import pty
 import queue
 import subprocess
 import random
@@ -232,6 +231,36 @@ class SubprocessHelper(object):
     @staticmethod
     def check_output_with_stdout_copy(cmd, shell=False, stdout=None,
             stderr=None, cwd=None, env=None, pty=False, write_function=None):
+        """ Like subprocess.check_output, but also copies the stdout/stderr to
+            sys.stdout/sys.stderr in realtime while the process runs while
+            still returning the full output as a return value after
+            termination and while still raising subprocess.CalledProcessError
+            when encountering a process exit code other than 0.
+
+            Optional parameters for extended behavior:
+
+            Use pty=True for optional pseudo-TTY wrapping on Unix to make the
+            launched command think it runs in an interactive terminal (this
+            will also remove any sort of stdout/stdin buffering or delay). All
+            other behavior remains the same.
+
+            Use write_function to specify a custom write function in addition
+            to sys.stdout/sys.stderr copying which can process the output in
+            realtime in some way. If you want to abort the process from inside
+            the write function, just raise an exception. If that happens,
+            check_output_with_stdout_copy will raise a RuntimeError instead of
+            the regular subprocess.CalledProcessError to indicate an abort
+            caused by a write_function error.
+        """
+        return SubprocessHelper._check_output_extended(cmd, shell=shell,
+            stdout=stdout, stderr=stderr, cwd=cwd, env=env, pty=pty,
+            write_function=write_function, copy_to_regular_stdout_stderr=True)
+
+    @staticmethod
+    def _check_output_extended(cmd, shell=False, stdout=None,
+            stderr=None, cwd=None, env=None, pty=False, write_function=None,
+            copy_to_regular_stdout_stderr=True,
+            process_handle_callback=None):
         # Get actual stdout/stderr as to be used internally:
         actual_stdout = stdout
         if stdout == None or stdout == sys.stderr:
@@ -254,11 +283,14 @@ class SubprocessHelper(object):
                 cwd=cwd, env=env)
         else:
             process = subprocess.Popen([sys.executable,
-                "-c", "import pty; import sys; " +\
-                "pty.spawn(sys.argv[1:])"] + cmd,
+                "-c", "import pty\nimport sys\n" +\
+                "exit_code = pty.spawn(sys.argv[1:])\n" +\
+                "sys.exit((int(exit_code) & (255 << 8)) >> 8)"] + cmd,
                 shell=shell,
                 stdout=actual_stdout, stderr=actual_stderr,
                 cwd=cwd, env=env)
+        if process_handle_callback != None:
+            process_handle_callback(process)
 
         # Output reader thread definition:
         class OutputReader(threading.Thread):
@@ -307,12 +339,17 @@ class SubprocessHelper(object):
             "user_write_error" : None,
         }
         def writer(data):
+            """ This function gets called by the thread to store data from
+                stdin to be returned or used later on.
+            """
             if len(data) == 0:
                 return
             try:
+                # Call user write function:
                 if write_function != None:
                     write_function(data)
             except Exception as e:
+                # Propagate error if the user function caused an error:
                 presented_output_store["user_write_error"] = str(e)
                 try:
                     process.kill()
@@ -320,16 +357,18 @@ class SubprocessHelper(object):
                     pass
             presented_output_store["data"] += data
         if actual_stdout == subprocess.PIPE:  # we need to collect stdout.
-            copy_to = stdout
-            if stdout == None or stdout == subprocess.PIPE:
+            if copy_to_regular_stdout_stderr:
                 copy_to = sys.stdout
+            else:
+                copy_to = None
             stdout_reader = OutputReader(process, process.stdout, writer,
                 copy_to=copy_to)
             stdout_reader.start()
         if actual_stderr == subprocess.PIPE:  # we need to collect stderr.
-            copy_to = stderr
-            if stderr == None or stderr == subprocess.PIPE:
+            if copy_to_regular_stdout_stderr:
                 copy_to = sys.stderr
+            else:
+                copy_to = None
             if stderr == subprocess.STDOUT:
                 stderr_reader = OutputReader(process, process.stderr, writer,
                     copy_to=sys.stdout)
@@ -340,7 +379,6 @@ class SubprocessHelper(object):
 
         # Wait for process to end:
         process.wait()
-        time.sleep(1)
         try:
             process.stdout.close()
         except Exception:
@@ -375,97 +413,64 @@ class SubprocessHelper(object):
     @staticmethod
     def check_output_with_isolated_pty(cmd, shell=False, cwd=None,
             stdout=None, stderr=None, timeout=None, env=None):
-        """ This is a re-implementation of subprocess.check_output() which
-            will isolate the child process in a pseudo-TTY to prevent it from
-            accessing the main terminal itself where drudder itself is
-            running from.
+        """ Like subprocess.check_output, but runs the process in a pseudo-TTY
+            using python's pty module.
         """
-        if cwd == None:
-            cwd = os.getcwd()
-        if stderr == None:
-            stderr = subprocess.DEVNULL
-        if env == None:
-            env = os.environ.copy()
+        return SubprocessHelper._check_output_extended(
+            cmd, shell=shell, cwd=cwd, env=env, stdout=stdout, stderr=stderr,
+            pty=True, copy_to_regular_stdout_stderr=False)
 
-        parent_conn, child_conn = multiprocessing.Pipe()
-        pid, fd = pty.fork()
+class ExecutionCache(object):
+    def __init__(self, duration_ms=600):
+        self.duration = duration_ms * 0.001
+        self._cache = dict()
 
-        # Child with pseudo TTY (since some tools like to detect the terminal
-        # size and greatly mess with our parsing):
-        if pid == 0:
-            result_dict = dict()
-            error_happened = None
-            result = None
-            # Run actual command in forked process with fake TTY:
-            try:
-                if stdout != None:
-                    result = subprocess.check_output(cmd, shell=shell,
-                        cwd=cwd, stdout=stdout, stderr=stderr,
-                        timeout=timeout, env=env)
-                else:
-                    result = subprocess.check_output(cmd, shell=shell,
-                        cwd=cwd, stderr=stderr, timeout=timeout,
-                        env=env)
-                try:
-                    result = result.encode("utf-8", "replace")
-                except AttributeError:
-                    pass
-            except Exception as e:
-                if isinstance(e, CalledProcessError):
-                    result_dict["result"] = base64.b64encode(
-                        e.output).decode("utf-8", "ignore")
-                error_happened = e
+    def check_output(self, cmd, **kwargs):
+        return self.check_output_with_isolated_pty(cmd, **kwargs)
 
-            # Collect result and send back to parent:
-            result_dict["error_happened"] = \
-                None if error_happened is None else str(
-                    error_happened)
-            if result != None:
-                result_dict["result"] = base64.b64encode(
-                    result).decode("utf-8", "ignore")
-            dumped = json.dumps(result_dict)
-            child_conn.send(dumped)
-            child_conn.flush()
-            time.sleep(1)
-            child_conn.close()
+    def check_output_with_isolated_pty(self, cmd, shell=False, cwd=None,
+            stdout=None, stderr=None, timeout=None, env=None,
+            ignore_cache=False):
+        cache_key = (
+            ("cmd", tuple(cmd)),
+            ("shell", shell),
+            ("cwd", cwd),
+            ("_env_keys", frozenset((env or {}).keys()))
+        )
+        # Wipe cache if we're supposed to ignore it:
+        if ignore_cache:
+            if cache_key in self._cache:
+                del(self._cache[cache_key])
 
-            # We're done. Parent will receive result and do stuff:
-            time.sleep(1)
-            os.exit(0)
-        else:
-            try:
-                # Wait for child to execute process and report result:
-                if timeout == None:
-                    result_dict = json.loads(parent_conn.recv())
-                else:
-                    if not parent_conn.poll(timeout):
-                        class PtyTimeoutError(subprocess.CalledProcessError):
-                            def __init__(self, exit_code, cmd, cwd):
-                                super().__init__(exit_code, cmd)
-                                self.cwd = cwd
+        # Check for old cache result:
+        entry = None
+        try:
+            entry = self._cache[cache_key]
+            if entry[0] + self.duration < time.monotonic():
+                del(self._cache[cache_key])
+                entry = None
+        except KeyError:
+            pass
 
-                            def __repr__(self):
-                                return "PtyTimeoutError: command " +\
-                                    "timed out: " + str(self.cmd) +\
-                                    " (cwd: " + str(self.cwd) + ")"
+        # Return cached result if any:
+        if entry != None:
+            return entry[1]
 
-                            def __str__(self):
-                                return self.__repr__()
 
-                        e = PtyTimeoutError(1, cmd, cwd)
-                        e.output = b""
-                        raise e
-                    result_dict = json.loads(parent_conn.recv())
-            finally:
-                parent_conn.close()
-            if result_dict["error_happened"] != None:
-                e = subprocess.CalledProcessError(1, cmd)
-                if result_dict["result"] != None:
-                    e.output = base64.b64decode(result_dict["result"])
-                else:
-                    e.output = b""
-                raise e
-            return base64.b64decode(result_dict["result"])
+        # Run and add to cache:
+        _had_error = None
+        try:
+            result = SubprocessHelper.check_output_with_isolated_pty(
+                cmd, shell=shell, cwd=cwd, stdout=stdout, stderr=stderr,
+                timeout=timeout, env=env)
+        except subprocess.CalledProcessError as e:
+            result = e.output
+            _had_error = e
+        self._cache[cache_key] = (time.monotonic(), result)
+        if _had_error != None:
+            raise _had_error
+        return result
+execution_cache = ExecutionCache()
 
 class DoubleLineBreakFormatter(HelpFormatter):
     """ Retains double line breaks/paragraphs """
@@ -543,14 +548,17 @@ class CommandLineArgumentParser(object):
             dest="force")
         return parser
 
-if len(" ".join(sys.argv[1:]).strip()) == 0 or \
-        sys.argv[1] == "--version" or sys.argv[1] == "-v" or \
-        sys.argv[1] == "-h" or sys.argv[1] == "--help":
-    parser = CommandLineArgumentParser.construct_parser()
-    parser.print_help()
-    if len(" ".join(sys.argv[1:]).strip()) == 0:
-        sys.exit(1)
-    sys.exit(0)
+# Abort early before attempting to install missing packages when --help or
+# --version was specified:
+if __name__ == "__main__":
+    if len(" ".join(sys.argv[1:]).strip()) == 0 or \
+            sys.argv[1] == "--version" or sys.argv[1] == "-v" or \
+            sys.argv[1] == "-h" or sys.argv[1] == "--help":
+        parser = CommandLineArgumentParser.construct_parser()
+        parser.print_help()
+        if len(" ".join(sys.argv[1:]).strip()) == 0:
+            sys.exit(1)
+        sys.exit(0)
  
 class YAMLInstallInfo(object):
     @staticmethod
@@ -1211,14 +1219,21 @@ class SystemInfo(object):
             were problems detecting this. May raise a ValueError if the path
             couldn't be properly examined for some reason.
         """
+        if (not os.path.exists(path) or
+                not os.path.isdir(path)) and len(path) > len(os.path.sep):
+            if path.endswith(os.path.sep):
+                path = path[:-len(os.path.sep)]
+            shorten_index = max(0, path.find(os.path.sep))
+            return SystemInfo.is_btrfs_subvolume(
+                path[:shorten_index])
+
         path = os.path.realpath(path)
         nontrivial_error = "error: failed to map a btrs subvolume "+\
             "to its POSIX path. This seems to be a non-trivial setup."+\
             " You should do your snapshotting manually!!"
 
         # First, get the containing mount point:
-        base_path = os.path.normpath(path + "/../")
-        mount = SystemInfo.get_fs_mount_root(base_path)
+        mount = SystemInfo.get_fs_mount_root(path)
         if mount == None:
             print("drudder: warning: internal problem: " +\
                 "mount point of " +\
@@ -1242,14 +1257,21 @@ class SystemInfo(object):
                     "maybe incompatible tool version? Please report this." +\
                     " Full output: " + str(output))
             line = line[line.find(" path ")+len(" path "):].strip()
-            full_path_guess = mount + line
+            full_path_guess = mount + os.path.sep + line
             if not os.path.exists(full_path_guess):
                 if line == "DELETED":
                     continue
-                print_msg(nontrivial_error, color="red")
+                print_msg(nontrivial_error + "\n\nError details: " +
+                    "btrfs full base path guess doesn't exist: " +
+                    str(full_path_guess) + " (checked upon: " +
+                    path + ")", color="red")
                 return False
-            if os.path.normpath(os.path.abspath(full_path_guess)) == \
-                    os.path.normpath(os.path.abspath(path)):
+            full_path_guess = os.path.normpath(os.path.abspath(
+                full_path_guess).replace(os.path.sep + os.path.sep,
+                os.path.sep))
+            normpath = os.path.normpath(os.path.abspath(path).replace(
+                os.path.sep + os.path.sep, os.path.sep))
+            if full_path_guess == normpath:
                 try:
                     output = subprocess.check_output([
                         SystemInfo.locate_binary("stat"),
@@ -1314,6 +1336,29 @@ class SystemInfo(object):
 
     @staticmethod
     def get_fs_mount_root(path):
+        path = SystemInfo.get_df_mounted_at(path)
+        mounts = subprocess.check_output([
+            "mount"])
+        try:
+            mounts = mounts.decode("utf-8", "replace")
+        except AttributeError:
+            pass
+        found_mount = None
+        found_mount_len = None
+        for mountl in mounts.strip().replace("\r\n", "\n").split("\n"):
+            mountl = mountl.strip()
+            if mountl.find(" on ") <= 0:
+                continue
+            mount_place = mountl.partition(" on ")[2].strip().partition(" ")[0]
+            if path.startswith(mount_place) and (
+                    found_mount == None or
+                    len(mount_place) > found_mount_len):
+                found_mount_len = len(mount_place)
+                found_mount = mount_place
+        return found_mount
+
+    @staticmethod
+    def get_df_mounted_at(path):
         """ Find out where the mount point of the filesystem is located of the
             given file path. (e.g. for a path "/home/myuser/somefile"
             located inside a home partition mounted at /home/, this would
@@ -1350,7 +1395,7 @@ class SystemInfo(object):
         # Skip first line:
         if output.find("\n") <= 0:
             raise RuntimeError("failed to parse df output")
-        output = output[output.find("\n")+1:]
+        output = output[output.find("\n")+1:].partition("\n")[0]
 
         # Skip past first entry:
         skip_pos = output.find(" ")
@@ -1358,7 +1403,7 @@ class SystemInfo(object):
             raise RuntimeError("failed to parse df output")
         output = output[skip_pos+1:].strip()
 
-        # Skip past all entries not starting with /
+        # Skip past all entries not starting with / (to get to "Mounte don")
         while True:
             fwslash = output.find("/")
             spacepos = output.find(" ")
@@ -1371,6 +1416,10 @@ class SystemInfo(object):
 
         if not output.startswith("/"):
             raise RuntimeError("failed to parse df output")
+        if os.path.exists(output) and os.path.isfile(output):
+            raise RuntimeError("failed to parse df output (" +
+                "searching mount path for: " + str(path) + "): " +
+                "result unexpectedly a regular file: " + str(output))
         return output
 
     @staticmethod
@@ -1436,11 +1485,12 @@ class SystemInfo(object):
             also identified as such by the "stat" tool (returns True) or not
             (returns False).
         """
-        output = subprocess.check_output([locate_binary("stat"),
+        output = subprocess.check_output([SystemInfo.locate_binary("stat"),
             "-c", "%i", path]).decode('utf-8', 'ignore').strip()
         return (output == "256")
 
-Installer.check_and_install_missing()
+if __name__ == "__main__":
+    Installer.check_and_install_missing()
 
 yaml_available = False
 try:
@@ -1457,13 +1507,13 @@ except ImportError as e1:
             yaml_available = True
         except ImportError as e2:
             pass
-if not yaml_available:
+if not yaml_available and __name__ == "__main__":
     print("drudder: error: PyYAML import unexpectedly failed. " +\
         "Please file a bug at " + str(BUG_URL))
     sys.exit(1)
 
 class DockerComposeYml(object):
-    def __init__(self, path, container=None):
+    def __init__(self, path, service=None):
         # If path just goes to directory, add file name:
         if os.path.isdir(path):
             path = os.path.join(path, "docker-compose.yml")
@@ -1491,23 +1541,23 @@ class DockerComposeYml(object):
                 pass
             if v >= 2:
                 self.is_v2 = True
-        if container != None: # data requested for specific container:
+        if service != None: # data requested for specific service:
             self._desired_data = None
             if self.is_v2:
                 self._desired_data = None
                 if isinstance(self.parsed_obj, dict) and \
                         "services" in self.parsed_obj:
                     if isinstance(self.parsed_obj["services"], dict) and \
-                            container in self.parsed_obj["services"]:
+                            service in self.parsed_obj["services"]:
                         if isinstance(self.parsed_obj["services"]\
-                                [container], dict):
+                                [service], dict):
                             self._desired_data = self.parsed_obj\
                                 ["services"][container]
             else:
                 if isinstance(self.parsed_obj, dict) and \
-                        container in self.parsed_obj:
-                    if isinstance(self.parsed_obj[container], dict):
-                        self._desired_data = self.parsed_obj[container]
+                        service in self.parsed_obj:
+                    if isinstance(self.parsed_obj[service], dict):
+                        self._desired_data = self.parsed_obj[service]
 
     @property
     def data(self):
@@ -1526,7 +1576,8 @@ class DockerComposeYml(object):
             return copy.copy(self.parsed_obj)
         return dict()
 
-def print_msg(text, service=None, container=None, color="blue"):
+def print_msg(text, group=None,
+        service=None, container=None, color="blue"):
     """ Print out a nicely formatted message prefixed with
         [drudder] and/or possibly a service or container name.
 
@@ -1556,10 +1607,12 @@ def print_msg(text, service=None, container=None, color="blue"):
         return part + "m"
 
     service_part = ""
-    if service != None and len(service) > 0:
-        service_part = "\033[0m" + color_code() + service
-        if container != None:
-            service_part = service_part + "/" + container
+    if group != None and len(group) > 0:
+        service_part = "\033[0m" + color_code() + group
+        if service != None:
+            service_part += "/" + service
+            if container != None:
+                service_part += "/" + container
 
     docker_services_part = ""
     if service == None or len(service) == 0:
@@ -1599,20 +1652,21 @@ def print_msg(text, service=None, container=None, color="blue"):
     print(print_text)
 
 class DataVolumeMount(object):
-    """ This represents a docker volume mount with the known information
-        about this mount. This is used by the DataVolume class below to
-        identify the various places it is mounted on the host's disk
+    """ A DataVolumeMount represents a docker volume mount on the host fs
+        with the known information about this mount.
+
+        This is used by the DataVolume class below to represent the various
+        places the volume is mounted on the host's disk.
     """
     def __init__(self, host_path=None,
-            mount_container=None, mount_container_filesystem_path=None):
+            mount_owning_service=None):
         self.host_path = host_path
-        self.container = mount_container
-        self.mount_container_filesystem_path = mount_container_filesystem_path
+        self.service = mount_owning_service
 
     def __repr__(self):
         if self.host_path != None:
             return self.host_path
-        return "<unspecified volume mount of " + str(container) + ">"
+        return "<unspecified volume mount of " + str(self.service) + ">"
 
 class DataVolume(object):
     """ This specifies the known information about a data volume. A volume
@@ -1625,19 +1679,23 @@ class DataVolume(object):
         self.known_host_mount = known_host_mount
         self.id = id
         self.name = None
-        self.owning_container = None
-        self.owning_container_path = None
+        self.owning_service = None
+        self.container_fs_path = None
         self.specified_in_yml = False
 
     def __hash__(self):
-        return hash(str(self.id) + str(self.owning_container_path) +\
+        return hash(str(self.id) + "/" +
+            str(self.owning_service.group_dir) + "/" +
             str(self.known_host_mount))
 
     def __repr__(self):
         if self.id != None:
             return str(self.id)
-        if self.owning_container_path != None:
-            return str(self.owning_container_path)
+        if self.container_fs_path != None:
+            if self.known_host_mount != None:
+                return str(self.known_host_mount) + ":" +\
+                    str(self.container_fs_path)
+            return str(self.container_fs_path)
         if self.known_host_mount != None:
             return str(self.known_host_mount)
         return "<DataVolume object with unknown mount and unknown id>"
@@ -1662,23 +1720,39 @@ class DataVolume(object):
                 return True
         return False
 
-    def _set_owning_container(self, container, container_fs_path=None):
-        """ Set the container this volume is associated with. Only for
+    def is_covered_by_service_backups(self, service):
+        if self.known_host_mount == None or \
+                self.owning_service == None:
+            return None
+
+        # If path exists and is not a dir, we can't backup it:
+        if os.path.exists(self.known_host_mount) and \
+                not os.path.isdir(self.known_host_mount):
+            return False
+
+        # Check whether path is contained in our service group dir:
+        base_path = os.path.normpath(self.owning_service.group_dir)
+        if os.path.normpath(self.known_host_mount).startswith(base_path):
+            return True
+        return False
+
+    def _set_owning_service(self, service, container_fs_path=None):
+        """ Set the service this volume is associated with. Only for
             internal use. This is called for volumes that are specified as
             host mounts in docker-compose.yml and don't have a proper
             system-wide volume identifier/name for use in other containers.
 
             DEVELOPER NOTE (Jonas Thiem):
             In theory, a volume that is purely a host directory mount can be
-            used by multiple containers of course. However, right now
+            used by multiple services of course. However, right now
             drudder only builds up volume information per container, and
             therefore this container-centric approach is sufficient for now.
             However, later this should be changed to allow multiple owning
             containers.
         """
-        self.owning_container = container
+        self.owning_service = service
         if container_fs_path != None:
-            self.owning_container_path = container_fs_path
+            self.container_fs_path = container_fs_path
 
     @property
     def mounts(self):
@@ -1686,17 +1760,13 @@ class DataVolume(object):
             a list of DataVolumeMount instances (or an empty list).
         """
         if self.known_host_mount != None:
-            if self.owning_container != None:
+            if self.owning_service != None:
                 return [ DataVolumeMount(host_path=self.known_host_mount,
-                    mount_container=self.owning_container,
-                    mount_container_filesystem_path=\
-                    self.owning_container_path) ]
+                    mount_owning_service=self.owning_service) ]
             else:
                 return [ DataVolumeMount(host_path=self.known_host_mount) ]
         elif self.owning_container != None:
-            return [ DataVolumeMount(mount_container=self.owning_container,
-                mount_container_filesystem_path=\
-                self.owning_container_path) ]
+            return [ DataVolumeMount(mount_container=self.owning_container) ]
         else:
             return []
 
@@ -1704,14 +1774,15 @@ class ServiceDependency(object):
     """ This class holds the info describing the dependency to another
         service's container.
     """
-    def __init__(self, other_service_name, other_service_path,
-            other_service_container_name):
+    def __init__(self, other_service_name,
+            other_group_name,
+            other_group_dir):
         self.service_name = other_service_name
-        self.service_path = other_service_path
-        self.container_name = other_service_container_name
+        self.group_name = other_group_name
+        self.group_dir = other_group_dir
 
     @property
-    def container(self):
+    def service(self):
         """ The actual container instance to start/stop the container which
             is the target of this dependency.
 
@@ -1722,13 +1793,14 @@ class ServiceDependency(object):
         if self.service_name == None:
             raise ValueError("the service that provides this dependency " +\
                 "isn't known")
-        return ServiceContainer(self.service_name, self.service_path,
-            self.container_name)
+        return Service(
+            self.service_name, self.group_name,
+            self.group_dir)
 
     def __repr__(self):
-        if self.service_name != None:
-            return self.service_name + "/" + self.container_name
-        return self.container_name + " (unknown service!!)"
+        if self.group_name != None:
+            return self.group_name + "/" + self.service_name
+        return self.service_name + " (unknown service group!!)"
 
 class ServiceContainer(object):
     """ An instance of this class holds the info for a service's container.
@@ -1736,33 +1808,35 @@ class ServiceContainer(object):
         or the directory for the respective docker-compose.yml where
         docker-compose commands can be run.
     """
-    def __init__(self, service_name, service_path, container_name,
-            image_name=None):
+    def __init__(self, container_id, service_name, group_name, group_dir):
+        self.container_id = container_id
         self.service_name = service_name
-        self.service_path = service_path
-        self.name = container_name
-        self._known_image_name = image_name
+        self.group_name = group_name
+        self.group_dir = group_dir
 
     def __repr__(self):
-        return self.service_name + "/" + self.name
+        return self.container_id
 
     def __hash__(self):
-        return hash(self.service_name + \
-            os.path.normpath(os.path.abspath(self.service_path)) + \
-            self.name)
+        return hash(self.container_id + "/" +
+            self.service_name + "/" + self.group_name + "/" + \
+            os.path.normpath(os.path.abspath(self.group_dir))
+            )
 
     def __eq__(self, other):
         if other is None:
             return False
         if not hasattr(other, "service_name") or not hasattr(other,
-                "service_path") or not hasattr(other, "name"):
+                "group_dir") or not hasattr(other, "container_id"):
+            return False
+        if other.container_id != self.container_id:
             return False
         if other.service_name != self.service_name:
             return False
-        if (os.path.normpath(os.path.abspath(self.service_path)) !=
-                os.path.normpath(os.path.abspath(other.service_path))):
+        if other.group_name != self.group_name:
             return False
-        if other.name != self.name:
+        if (os.path.normpath(os.path.abspath(self.group_dir)) !=
+                os.path.normpath(os.path.abspath(other.group_dir))):
             return False
         return True
 
@@ -1773,7 +1847,7 @@ class ServiceContainer(object):
     def potentially_lost_volumes(self):
         # Find volumes that will be dangling and not re-attached by
         # docker-compose on container recreation:
-        potentially_lost_volumes = []
+        potentially_lost_volumes = set()
         for volume in self.volumes:
             if volume.name != None and volume.specified_in_yml:
                 # Named volume specified in .yml -> we should fine
@@ -1789,77 +1863,42 @@ class ServiceContainer(object):
             potentially_lost_volumes.append(volume)
         return potentially_lost_volumes
 
-    def launch(self, force_container_recreation=False):
+    def start(self, force_container_recreation=False):
         if self.running:
             return
 
-        # Warn about volumes that might be dangling after recreation
-        potentially_lost_volumes = self.potentially_lost_volumes
-        if len(potentially_lost_volumes) == 0 or \
-                force_container_recreation:
-            if len(potentially_lost_volumes) > 0:
-                print_msg("some volumes might be potentially dangling, " +\
-                    "but container recreation was forced by user",
-                    service=self.service.name, container=self.name,
-                    color="yellow")
-            subprocess.check_call([SystemInfo.docker_compose_path(),
-                "rm", "-f", self.name],
-                cwd=self.service.service_path)
-            subprocess.check_call([SystemInfo.docker_compose_path(),
-                "build", self.name],
-                cwd=self.service.service_path)
-        else:
-            for vol in potentially_lost_volumes:
-                print_msg("ONLY LIMITED RESTART, CONTAINER WONT BE "+\
-                    "UPDATED TO NEWEST IMAGE. " +\
-                    "Cannot recreate container safely: " +\
-                    "container has a volume that might be lost " +\
-                    "or dangling after recreation: "+\
-                    "" + str(vol),
-                    service=self.service.name,
-                    container=self.name, color="yellow")
-        subprocess.check_call([SystemInfo.docker_compose_path(),
-            "up", "-d", self.name],
-            cwd=self.service.service_path)
+        if self.container_id == self.service.default_container_id:
+            self.service.start(
+                force_container_recreation=force_container_recreation)
+
+        raise RuntimeError("launching non-standard containers " +
+            "directly is not implemented right now")
 
     def stop(self):
-        subprocess.check_call([SystemInfo.docker_compose_path(),
-            "stop", self.name], cwd=self.service.service_path)
+        subprocess.check_call([SystemInfo.docker_path(),
+            "stop", self.container_id],
+            cwd=self.service.group.group_dir)
 
     @property
     def running(self):
-        names = self.service._get_running_service_container_names()
-        return (self.name in names)
+        ids = self.service.group._get_running_service_container_ids()
+        return (self.container_id in ids)
 
     @property
     def service(self):
         """ The service this container belongs to. """
-        return Service(self.service_name, self.service_path)
-
-    @property
-    def default_container_name(self):
-        fpath = os.path.normpath(os.path.abspath(self.service_path))
-        return (os.path.basename(fpath).replace("-", "").replace(".", "")
-            + "_" + str(self.name) + "_1")
-
-    @property
-    def image_name(self):
-        if self._known_image_name != None:
-            return self._known_image_name
-        return self.default_container_name
-
-    @property
-    def current_running_instance_name(self):
-        return self.default_container_name
+        return Service(self.service_name, self.group_name,
+            self.group_dir)
 
     def _get_active_volume_directories(self, rw_only=False):
-        """ Get the volumes active in this container. If the container hasn't
-            been started before, this might raise a ValueError since this
-            information is obtained via docker inspection of the container.
+        """ Get the volumes active in this container as a tuple list.
+            If the container hasn't been started before, this might raise
+            a ValueError since this information is obtained via docker
+            inspection of the container.
         """
         try:
-            output = subprocess.check_output([SystemInfo.docker_path(),
-                "inspect", self.current_running_instance_name],
+            output = execution_cache.check_output([SystemInfo.docker_path(),
+                "inspect", self.container_id],
                 stderr=subprocess.DEVNULL)
         except subprocess.CalledProcessError:
             raise ValueError("container not created - you might need to "+\
@@ -1897,7 +1936,7 @@ class ServiceContainer(object):
         try:
             output = subprocess.check_output([SystemInfo.docker_path(),
                 "inspect",
-                self.current_running_instance_name],
+                self.container_id],
                 stderr=subprocess.DEVNULL)
         except subprocess.CalledProcessError:
             raise ValueError("container not created - you might need to "+\
@@ -1910,8 +1949,9 @@ class ServiceContainer(object):
         return None
 
     def _active_volumes(self, rw_only=False):
-        """ Get all the active volumes of this container. May return an empty
-            or outdated list if the container is stopped.
+        """ Get all the active volumes of this container which are actually
+            created right now and in use. May return an empty or outdated
+            list if the container is stopped.
 
             Returns a list of tuples (host file system path,
                 container filesystem path).
@@ -1924,43 +1964,6 @@ class ServiceContainer(object):
                 self._get_active_volume_directories(rw_only=rw_only)]
         except ValueError:
             return []
-
-    def _config_specified_volumes(self, rw_only=False):
-        """ Attempt to parse and return all volumes used by this container
-            from the according docker-compose.yml.
-
-            Returns a list of tuples (host file system path,
-                container filesystem path).
-        """
-        volumes = []
-        def parse_volume_line(parts):
-            """ Helper function to parse a single volume line """
-
-            # Check if read-only or not:
-            rwro = "rw"
-            if len(parts) >= 3:
-                if "ro" in [item.strip() for item in parts[2].split(",")]:
-                    rwro = "ro"
-
-            # Make sure path is absolute:
-            if len(parts) >= 2:
-                if (parts[0].startswith("/") or parts[0].startswith("./") or
-                        parts[0].startswith("../")) \
-                        and not os.path.isabs(parts[0]):
-                    parts[0] = os.path.join(
-                        os.path.realpath(self.service.service_path), parts[0])
-                    parts[0] = os.path.normpath(os.path.abspath(parts[0]))
-
-            # Add to list:
-            if len(parts) >= 2 and (rwro == "rw" or not rw_only):
-                volumes.append((parts[0], parts[1]))
-
-        # Extract volume lines:
-        yml = DockerComposeYml(self.service_path, self.name)
-        if "volumes" in yml.data:
-            for line in yml.data["volumes"]:
-                parse_volume_line(line.split(":"))
-        return volumes
 
     def _get_volumes(self, rw_only=False):
         volumes = []
@@ -1976,19 +1979,26 @@ class ServiceContainer(object):
                     known_name = vol_line[0]
             vol = DataVolume(known_host_mount=host_mount_path,
                 id=known_name, name=known_name)
-            vol._set_owning_container(self, vol_line[1])
+            vol._set_owning_service(self.service, vol_line[1])
             vol.specified_in_yml = from_yml
             volumes.append(vol)
 
         volumes_in_yml_by_normpath = set()
         vol_lines = {}
+
+        # Collect all volumes actually used by the container right now:
         for vol1 in self._active_volumes(rw_only=rw_only):
             if not vol1[0] in vol_lines or vol_lines[vol1[0]] == None:
                 vol_lines[os.path.normpath(vol1[0])] = vol1[1]
-        for vol2 in self._config_specified_volumes(rw_only=rw_only):
+
+        # Collect all volumes this container should have according to the
+        # docker-compose.yml listing:
+        for vol2 in self.service._config_specified_volumes(rw_only=rw_only):
             if not vol2[0] in vol_lines or vol_lines[vol2[0]] == None:
                 vol_lines[os.path.normpath(vol2[0])] = vol2[1]
             volumes_in_yml_by_normpath.add(os.path.normpath(vol2[0]))
+
+        # Go through all volumes and construct DataVolume instances:
         for vol_line_part0 in vol_lines:
             if os.path.normpath(vol_line_part0) in\
                     volumes_in_yml_by_normpath:
@@ -2014,12 +2024,216 @@ class ServiceContainer(object):
         """
         return self._get_volumes(rw_only=True)
 
+class Service(object):
+    def __init__(self, service_name, group_name, group_dir):
+        self.name = service_name
+        self.group_name = group_name
+        self.group_dir = group_dir
+
+    @staticmethod
+    def all():
+        result = set()
+        for group in ServiceGroup.all():
+            for service in group.services:
+                result.add(service)
+        return result
+
+    @property
+    def potentially_lost_volumes(self):
+        result = set()
+        for containers in self.containers:
+            result.union(containers.potentially_lost_volumes)
+        return result
+
+    @property
+    def group(self):
+        return ServiceGroup(self.group_name, self.group_dir)
+
+    def __repr__(self):
+        return self.name + " service (part of " + str(self.group) + ")"
+
+    def stop(self):
+        for container in self.running_containers:
+            container.stop()
+
+    def start(self, force_container_recreation=False):
+        if self.running:
+            return
+
+        # Warn about volumes that might be dangling after recreation
+        potentially_lost_volumes = self.potentially_lost_volumes
+        if len(potentially_lost_volumes) == 0 or \
+                force_container_recreation:
+            if len(potentially_lost_volumes) > 0:
+                print_msg("some volumes might be potentially dangling, " +\
+                    "but container recreation was forced by user",
+                    service=self.service.name, container=self.name,
+                    color="yellow")
+            subprocess.check_call([SystemInfo.docker_compose_path(),
+                "rm", "-f", self.name],
+                cwd=self.group.group_dir,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            for vol in potentially_lost_volumes:
+                print_msg("ONLY LIMITED RESTART, CONTAINER WONT BE "+\
+                    "UPDATED TO NEWEST IMAGE. " +\
+                    "Cannot recreate container safely: " +\
+                    "container has a volume that might be lost " +\
+                    "or dangling after recreation: "+\
+                    "" + str(vol),
+                    service=self.service.name,
+                    container=self.name, color="yellow")
+        subprocess.check_call([SystemInfo.docker_compose_path(),
+            "up", "-d", self.name],
+            cwd=self.group.group_dir, stderr=subprocess.STDOUT)
+
+    def __eq__(self, other):
+        if not hasattr(other, "name") or not hasattr(other,
+                "group_name") or not hasattr(other, "group_dir"):
+            return False
+        if hasattr(other, "service_name"):  # ServiceContainer, not Service
+            return False
+        if self.name == other.name and self.group_name == \
+                other.group_name:
+            if os.path.normpath(os.path.abspath(
+                    os.path.realpath(self.group_dir))) == \
+                    os.path.normpath(os.path.abspath(
+                    os.path.realpath(other.group_dir))):
+                return True
+        return False
+
+    def __neq__(self, other):
+        return not self.__eq__(other)
+
+    def __hash__(self):
+        return hash(self.name + "/" +
+            self.group_name + "/" + os.path.normpath(
+            os.path.abspath(os.path.realpath(self.group_dir))))
+
+    @property
+    def default_container_id(self):
+        fpath = os.path.normpath(os.path.abspath(self.group_dir))
+        return (os.path.basename(fpath).replace("-", "").replace(".", "")
+            + "_" + str(self.name) + "_1")
+
+    @property
+    def running(self):
+        return len(self.group._get_running_service_container_names(
+            self)) > 0
+
+    @property
+    def containers(self):
+        container_instance_ids = set()
+
+        # Collect actual existing container instances:
+        container_ps_list = self.group._get_ps_service_container_ids(
+            only_running=False)
+        for cid in container_ps_list:
+            if self.group._container_id_belongs_to_service(cid, self): 
+                container_instance_ids.add(cid)
+
+        # Add hypothetical default container:
+        container_ids = container_instance_ids.union(set([
+            self.default_container_id]))
+
+        # Convert to proper ServiceContainer classes:
+        result = set()
+        for cid in container_ids:
+            container = ServiceContainer(cid,
+                self.name, self.group_name, self.group_dir)
+            result.add(container)
+        return result
+
+    @property
+    def running_containers(self):
+        """ Get only the containers of this service which are currently up and
+            running.
+        """
+        running_names = self.group._get_running_service_container_names(
+            self)
+        running_containers = []
+        for container in self.containers:
+            if container.container_id in running_names:
+                running_containers.append(container)
+        return running_containers
+
+    @property
+    def volumes(self):
+        volume_set = set()
+        for container in self.containers:
+            for volume in container.volumes:
+                volume_set.add(volume)
+        return list(volume_set)
+
+    @property
+    def rw_volumes(self):
+        volume_set = set()
+        for container in self.containers:
+            for volume in container.rw_volumes:
+                volume_set.add(volume)
+        return list(volume_set)
+
+    @property
+    def image_name(self):
+        # Assemble results:
+        yml = DockerComposeYml(self.service_path)
+        for service_name in yml.services:
+            if not isinstance(yml.services[service_name], dict):
+                continue
+            for property_name in yml.services[service_name]:
+                value = yml.services[service_name][property_name]
+                if property_name == "image":
+                    # This container is constructed from an image:
+                    return value
+                elif property_name == "build":
+                    # Built from a directory with Dockerfile:
+                    return None
+        raise RuntimeError("no entry found for service " + str(self.name) +\
+            " in group " + str(self.group))
+
+    def _config_specified_volumes(self, rw_only=False):
+        """ Parse and return all volumes specified for this service in the
+            docker-compose.yml.
+
+            Returns a list of tuples (host file system path,
+                container filesystem path).
+        """
+        volumes = []
+        def parse_volume_line(parts):
+            """ Helper function to parse a single volume line """
+
+            # Check if read-only or not:
+            rwro = "rw"
+            if len(parts) >= 3:
+                if "ro" in [item.strip() for item in parts[2].split(",")]:
+                    rwro = "ro"
+
+            # Make sure path is absolute:
+            if len(parts) >= 2:
+                if (parts[0].startswith("/") or parts[0].startswith("./") or
+                        parts[0].startswith("../")) \
+                        and not os.path.isabs(parts[0]):
+                    parts[0] = os.path.join(
+                        os.path.realpath(self.group_dir), parts[0])
+                    parts[0] = os.path.normpath(os.path.abspath(parts[0]))
+
+            # Add to list:
+            if len(parts) >= 2 and (rwro == "rw" or not rw_only):
+                volumes.append((parts[0], parts[1]))
+
+        # Extract volume lines:
+        yml = DockerComposeYml(self.group_dir, self.name)
+        if "volumes" in yml.data:
+            for line in yml.data["volumes"]:
+                parse_volume_line(line.split(":"))
+        return volumes
+
     @property
     def dependencies(self):
         # Collect all external_links and links container references:
-        external_links = self.service._external_docker_compose_links(
+        external_links = self.group._external_docker_compose_links(
             self.name)
-        internal_links = self.service._internal_docker_compose_links(
+        internal_links = self.group._internal_docker_compose_links(
             self.name)
         dependencies = []
 
@@ -2028,55 +2242,59 @@ class ServiceContainer(object):
             link_name = link.partition(":")[0]
             target_found = False
             # See if we can find the target service:
-            for service in Service.all():
-                for container in service.containers:
-                    if (service == self.service and 
-                            link_name == container.name) or \
-                            link_name == container.default_container_name:
+            for service_group in ServiceGroup.all():
+                for service in service_group.services:
+                    if service.default_container_id == link_name:
                         target_found = True
                         dependencies.append(ServiceDependency(
-                            service.name, service.service_path,
-                            container.name))
+                            service.name,
+                            service.group.name,
+                            service.group.group_dir))
             if not target_found:
                 dependencies.append(ServiceDependency(
-                    None, None, link_name))
+                    link_name, None, None))
 
         # Go through all internal links:
         for link in internal_links:
             link_name = link.partition(":")[0]
             target_found = False
             # See if we can find the target service:
-            for container in self.service.containers:
-                 if link_name == container.name:
+            for service in self.group.services:
+                 if link_name == service.name:
                     target_found = True
                     dependencies.append(ServiceDependency(
-                        self.service_name, self.service_path,
-                        container.name))
+                        link_name, self.group_name,
+                        self.group_dir))
             if not target_found:
                 dependencies.append(ServiceDependency(
-                    None, None, link_name))
+                    link_name, None, None))
         return dependencies
 
-class Service(object):
+class ServiceGroup(object):
     """ This class holds all the info and helper functionality for managing
-        a service, whereas a service is a group of containers with one single
-        docker-compose.yml stored in a subfolder in the global service
-        directory.
+        a service group, whereas a service group is a folder which
+        1.) contains a docker-compose.yml file which describes one or more
+            services contained in that group, and
+        2.) is located inside a global service group directory (usually /srv/)
     """
-    def __init__(self, service_name, service_path):
-        self.name = service_name
-        self.service_path = service_path
+    def __init__(self, group_name, group_dir):
+        self.name = group_name
+        self.group_dir = group_dir
 
     def __repr__(self):
-        return self.name + " service at " + str(self.service_path)
+        return self.name + " service group at " + str(self.group_dir)
 
     def __eq__(self, other):
-        if not hasattr(other, "name") and not hasattr(other,
-                "service_path"):
+        if not hasattr(other, "name") or not hasattr(other,
+                "group_dir"):
+            return False
+        if hasattr(other, "group_name"):  # a Service, not a ServiceGroup
             return False
         if self.name == other.name:
-            if os.path.normpath(os.path.abspath(self.service_path)) == \
-                    os.path.normpath(os.path.abspath(other.service_path)):
+            if os.path.normpath(os.path.abspath(
+                    os.path.realpath(self.group_dir))) == \
+                    os.path.normpath(os.path.abspath(
+                    os.path.realpath(other.group_dir))):
                 return True
         return False
 
@@ -2085,24 +2303,21 @@ class Service(object):
 
     def __hash__(self):
         return hash(self.name + "/" + os.path.normpath(
-            os.path.abspath(self.service_path)))
-
-    def is_running(self):
-        return len(self._get_running_service_container_names()) > 0
+            os.path.abspath(os.path.realpath(self.group_dir))))
 
     @staticmethod
     def find_by_name(name):
-        for service in Service.all():
-            if service.name == name:
-                return service
+        for service_group in ServiceGroup.all():
+            if service_group.name == name:
+                return service_group
         return None
 
     @staticmethod
-    def all_containers():
+    def all_services():
         result = set()
-        for service in Service.all():
-            for container in service.containers:
-                result.add(container)
+        for group in ServiceGroup.all():
+            for service in group.services:
+                result.add(service)
         return list(result)
 
     @staticmethod
@@ -2136,7 +2351,7 @@ class Service(object):
                 if not os.path.exists(os.path.join((os.path.join(d, f)),
                         "docker-compose.yml")):
                     continue
-                services.append(Service(f, 
+                services.append(ServiceGroup(f, 
                     os.path.normpath(os.path.join(d, f))))
 
         # Schedule some common places for scanning:
@@ -2145,32 +2360,57 @@ class Service(object):
         scan_dir("/srv")
         return services
 
-    def _fix_container_name(self, container_name):
+    def _fix_container_id(self, container_id):
         """ !! BIG HACK !!
             Sometimes docker-compose gives us just a shortened name for a
             container. While I am not fully aware of the algorithm, I assume
-            it will usually still be unique. In this function, we try to get
+            it will usually still be unique (it doesn't need to be but
+            in almost all cases it still is). In this function, we try to get
             back the full unshortened name.
         """
-        assert(container_name != None)
-        for container in self.containers:
-            if container.current_running_instance_name == container_name \
-                    or container.default_container_name == container_name:
-                return container.name
-        matched_name = None
-        for container in self.containers:
-            if container.current_running_instance_name.startswith(
-                    container_name):
-                if matched_name != None:
-                    raise RuntimeError("encountered unexpected non-unique " +\
-                        "container label trying to find the full name for "+\
-                         "\"" + str(container_name) + "\": variant A: " +\
-                        str(matched_name) + ", variant B: " +\
-                        str(container.name))
-                matched_name = container.name
-        return matched_name
+        assert(container_id != None)
+        # Check if a standard container name for a service matches fully:
+        for service in self.services:
+            if service.default_container_id == container_id:
+                return container_id
 
-    def _get_running_service_container_names(self):
+        # Check if this matches a common name pattern:
+        for service in self.services:
+            def is_int(v):
+                try:
+                    dat_int = int(v)
+                except (TypeError, ValueError):
+                    return False
+                return True
+            default_id = service.default_container_id
+            assert(default_id.endswith("_1"))
+            id_base = default_id[:-len("1")]
+            if container_id.startswith(id_base + "run_"):
+                ending = container_id[len(id_base + "run_"):]
+                if is_int(ending):
+                    return container_id
+            elif container_id.startswith (id_base):
+                ending = container_id[len(id_base):]
+                if is_int(ending):
+                    return container_id
+
+        # Check for whether a default container name starts with this name:
+        matched_id = None
+        for service in self.services:
+            if service.default_container_id.startswith(
+                        container_id) or \
+                    (service.default_container_id[:-len("1")] +\
+                        "_run_").startswith(
+                        container_id):
+                if matched_id != None:
+                    return None  # not unique.
+                matched_id = container.container_id
+        return matched_id
+
+    def _get_running_service_container_ids(self):
+        return self._get_ps_service_container_ids(only_running=True)
+
+    def _get_ps_service_container_ids(self, only_running=False):
         """ Get all running containers of the given service.
             Returns a list of container ids.
         """
@@ -2178,9 +2418,9 @@ class Service(object):
         try:
             env = os.environ.copy()
             env["COLUMNS"] = "200"
-            output = SubprocessHelper.check_output_with_isolated_pty([
+            output = execution_cache.check_output_with_isolated_pty([
                 SystemInfo.docker_compose_path(), "ps"],
-                cwd=self.service_path, stderr=subprocess.STDOUT,
+                cwd=self.group_dir, stderr=subprocess.STDOUT,
                 timeout=10, env=env).\
                 decode("utf-8", "ignore")
         except subprocess.CalledProcessError as e:
@@ -2190,37 +2430,79 @@ class Service(object):
                     "installed with " +\
                     "a version incompatible to docker.", color="red")
                 sys.exit(1)
+            if output.find("ERROR") > 0 and output.find("ERROR") <= 10 and\
+                    output.find("In file") > output.find("ERROR") and \
+                    output.find("In file ") <= 20 and \
+                    output.find("docker-compose.yml") >= 0:
+                print_msg("warning: it appears the docker-compose file " +\
+                    "has a syntax error: " + str(output), color="yellow",
+                    service=self.name)
+                return []
             raise e
         output = output.\
-            replace("\r", "\n").replace("\n\n", "").split("\n")
+            replace("\r", "\n").replace("\n\n", "\n").split("\n")
 
         skipped_past_dashes = False
         for output_line in output:
+            # Skip irrelevant lines:
             if len(output_line.strip()) == 0:
                 continue
-            if output_line.startswith("---------"):
+            if output_line.startswith("---------") \
+                    or output_line.startswith(" ") \
+                    or output_line.startswith("\t"):
                 skipped_past_dashes = True
                 continue
+
+            # Extract containers:
             output_line = output_line.strip()
-            if len(output_line) > 0 and output_line.find(" Up") > 0:
-                # this is a running container!
+            if len(output_line) > 0 and (output_line.find(" Up") > 0 or \
+                    not only_running):
                 space_pos = output_line.find(" ")
                 running_containers.append(output_line[:space_pos])
-        l = [self._fix_container_name(container) \
+        l = [self._fix_container_id(container) \
             for container in running_containers]
         return [name for name in l if name is not None]
 
-    def _internal_docker_compose_links(self, container_name):
-        """ Attempt to parse and return all containers referenced as external
-            links used by a service from the respective docker-compose.yml of
-            that service.
+    def _container_id_belongs_to_service(self, cid, service):
+        def is_int(i):
+            try:
+                int_i = int(i)
+            except (TypeError, ValueError):
+                return False
+            return True
+        def_base = service.default_container_id[:-len("1")]
+        if cid.startswith(def_base):
+            remains = cid[len(def_base):]
+            if remains.startswith("run_"):
+                remains = remains[len("run_"):]
+            if is_int(remains):
+                return True
+        return False
+
+    def _get_running_service_container_names(self, service):
+        result = set()
+
+        # Get all running containers in this service group:
+        running_ids = set(self._get_running_service_container_ids())
+
+        # Find out which ones belong to the queried service:
+        for running_id in running_ids:
+            if self._container_id_belongs_to_service(
+                    running_id, service):
+                result.add(running_id)
+
+        return list(result)
+
+    def _internal_docker_compose_links(self, service_name):
+        """ Attempt to parse and return all services referenced as internal
+            links used by a service from the respective docker-compose.yml.
         """
         links = []
 
         # Get docker-compose.yml data:
-        yml = DockerComposeYml(self.service_path, container_name)
+        yml = DockerComposeYml(self.group_dir, service_name)
         if yml.data == None:
-            raise ValueError("no such container found: " +\
+            raise ValueError("no such service found: " +\
                 str(container_name))
 
         # Extract link data:
@@ -2229,39 +2511,19 @@ class Service(object):
         return [entry.partition(":")[0] for entry in \
             yml.data["links"]]
 
-    def _external_docker_compose_links(self, container_name):
+    def _external_docker_compose_links(self, service_name):
         """ Attempt to parse and return all containers referenced as external
-            links used by a service from the respective docker-compose.yml of
-            that service.
+            links used by a service from the respective docker-compose.yml.
         """
         external_links = []
-        yml = DockerComposeYml(self.service_path, container_name)
+        yml = DockerComposeYml(self.group_dir, service_name)
         if yml.data == None:
-            raise ValueError("no such container found: " +\
+            raise ValueError("no such service found: " +\
                 str(container_name))
         if not "external_links" in yml.data:
             return []
         return [entry.partition(":")[0] for entry in \
             yml.data["external_links"]]
-
-    def get_running_containers(self):
-        """ Get only the containers of this service which are currently up and
-            running.
-        """
-        running_names = self._get_running_service_container_names()
-        running_containers = []
-        for container in self.containers:
-            if container.name in running_names:
-                running_containers.append(container)
-        return running_containers
-
-    @property
-    def rw_volumes(self):
-        volume_set = set()
-        for container in self.containers:
-            for volume in container.rw_volumes:
-                volume_set.add(volume)
-        return list(volume_set)
 
     @staticmethod
     def global_clean_up(ask=True):
@@ -2328,31 +2590,17 @@ class Service(object):
                 "volume", "rm", vol])
 
     @property
-    def containers(self):
-        """ Get all containers specified for the given service's
-            docker-compose.yml.
+    def services(self):
+        """ Get all services that are part of this services group as
+            specified in the group's docker-compose.yml.
         """
-        results = []
+        results = set()
 
         # Assemble results:
-        yml = DockerComposeYml(self.service_path)
-        for container_name in yml.services:
-            if not isinstance(yml.services[container_name], dict):
-                continue
-            for property_name in yml.services[container_name]:
-                value = yml.services[container_name][property_name]
-                if property_name == "image":
-                    # This container is constructed from an image:
-                    image_name = value
-                    results.append(ServiceContainer(
-                        self.name, self.service_path,
-                        container_name,
-                        image_name=image_name))
-                elif property_name == "build":
-                    # Built from a directory with Dockerfile:
-                    results.append(ServiceContainer(
-                        self.name, self.service_path,
-                        container_name))
+        yml = DockerComposeYml(self.group_dir)
+        for service_name in yml.services:
+            results.add(Service(service_name,
+                self.name, self.group_dir))
         return results
 
 class FailedLaunchTracker(object):
@@ -2383,13 +2631,13 @@ class LaunchThreaded(threading.Thread):
         thread if it takes too long.
     """
     
-    def __init__(self, container, failed_launch_tracker=None,
+    def __init__(self, service, failed_launch_tracker=None,
             force_container_recreation=False, do_on_success=None,
             do_on_failure=None):
         super().__init__()
-        self.container = container
+        self.service = service
         self.failed_launch_tracker = failed_launch_tracker
-        self.path = self.container.service.service_path
+        self.path = self.service.group.group_dir
         self.force_container_recreation = force_container_recreation
         def do_nothing(self):
             pass
@@ -2403,7 +2651,7 @@ class LaunchThreaded(threading.Thread):
     def run(self):
         try:
             # Fix permissions if we have instructions for that:
-            perms = Permissions(self.container.service)
+            perms = Permissions(self.service.group)
             perm_info = perms.get_permission_info_from_yml()
             if ("owner" in perm_info["livedata-permissions"]) \
                     and os.path.exists(os.path.join(
@@ -2427,63 +2675,63 @@ class LaunchThreaded(threading.Thread):
 
             # Get dependencies and see if they have all been launched:
             waiting_msg = False
-            for dependency in self.container.dependencies:
-                if not dependency.container.running:
+            for dependency in self.service.dependencies:
+                if not dependency.service.running:
                     if not waiting_msg:
                         waiting_msg = True
                     time.sleep(5)
-                    while not dependency.container.running:
+                    while not dependency.service.running:
                         if self.failed_launch_tracker != None:
-                            if dependency.container in \
+                            if dependency.service in \
                                     self.failed_launch_tracker:
                                 print_msg("launch aborted due to failed " +\
                                     "dependency launch: " +\
                                     str(dependency),
-                                    service=self.container.service.name,
-                                    container=self.container.name,
+                                    service=self.service.name,
+                                    group=self.service.group.name,
                                     color="red")
                                 self.failed_launch_tracker.add(
-                                    self.container)
+                                    self.service)
                                 self.do_on_failure()
                                 return
                         time.sleep(5)
 
             # Launch the service:
-            print_msg("launching...", service=self.container.service.name,
-                container=self.container.name, color="blue")
+            print_msg("launching...", service=self.service.name,
+                group=self.service.group.name, color="blue")
             try:
-                self.container.launch(
+                self.service.start(
                     force_container_recreation=\
                     self.force_container_recreation)
                 time.sleep(1)
-                if not self.container.running:
+                if not self.service.running:
                     print_msg("failed to launch. (nothing running after " +\
                         "1 second)",\
-                        service=self.container.service.name,
-                        container=self.container.name, color="red")
+                        service=self.service.name,
+                        group=self.service.group.name, color="red")
                     if self.failed_launch_tracker != None:
-                        self.failed_launch_tracker.add(self.container)
+                        self.failed_launch_tracker.add(self.service)
                     self.do_on_failure()
                     return
                 print_msg("now running.",
-                    service=self.container.service.name,
-                    container=self.container.name, color="green")
+                    service=self.service.name,
+                    group=self.service.group.name, color="green")
                 self.do_on_success()
             except subprocess.CalledProcessError:
                 print_msg("failed to launch. (error exit code)",\
-                    service=self.container.service.name,
-                    container=self.container.name,
+                    service=self.service.name,
+                    group=self.service.group.name,
                     color="red")
                 if self.failed_launch_tracker != None:
-                    self.failed_launch_tracker.add(self.container)
+                    self.failed_launch_tracker.add(self.service)
                 self.do_on_failure()
             except Exception as e:
                 print_msg("failed to launch. (unknown error)",\
-                    service=self.container.service.name,
-                    container=self.container.name,
+                    service=self.service.name,
+                    group=self.service.group.name,
                     color="red")
                 if self.failed_launch_tracker != None:
-                    self.failed_launch_tracker.add(self.container)
+                    self.failed_launch_tracker.add(self.service)
                 self.do_on_failure()
                 raise e
         except Exception as e:
@@ -2492,7 +2740,7 @@ class LaunchThreaded(threading.Thread):
             traceback.print_exc()
 
     @staticmethod
-    def attempt_launch(container, to_background_timeout=5,
+    def attempt_launch(service, to_background_timeout=5,
             failed_launch_tracker=None, force_container_recreation=False,
             do_on_success=None, do_on_failure=None):
         """ Launch a given service and wait for it to run for a few seconds.
@@ -2502,7 +2750,7 @@ class LaunchThreaded(threading.Thread):
         """
 
         # Start a new launch thread:
-        launch_t = LaunchThreaded(container,
+        launch_t = LaunchThreaded(service,
             failed_launch_tracker=failed_launch_tracker,
             do_on_success=do_on_success, do_on_failure=do_on_failure,
             force_container_recreation=force_container_recreation)
@@ -2516,10 +2764,10 @@ class LaunchThreaded(threading.Thread):
         return None
 
     @staticmethod
-    def stop(container):
+    def stop(service):
         """ Stop a service. """
-        assert(container != None)
-        container.stop()
+        assert(service != None)
+        service.stop()
 
     @staticmethod
     def wait_for_launches(threads):
@@ -2628,25 +2876,26 @@ parser.add_argument("--force",
         "respective warning prompted by an action to understand the "+\
         "consequences",
     dest="force")
-if len(" ".join(sys.argv[1:]).strip()) == 0:
-    parser.print_help()
-    sys.exit(1)
-for arg in sys.argv[1:]:
-    if arg == "--version" or arg == "-v" or arg == "-V":
-        print("drudder version " + str(TOOL_VERSION))
-        sys.exit(0)
-args = parser.parse_args()
+if __name__ == "__main__":
+    if len(" ".join(sys.argv[1:]).strip()) == 0:
+        parser.print_help()
+        sys.exit(1)
+    for arg in sys.argv[1:]:
+        if arg == "--version" or arg == "-v" or arg == "-V":
+            print("drudder version " + str(TOOL_VERSION))
+            sys.exit(0)
+    args = parser.parse_args()
 
 ensure_docker = SystemInfo.docker_path()
 ensure_docker_compose = SystemInfo.docker_compose_path()
 
 class Snapshots(object):
-    def __init__(self, service):
-        self.service = service
+    def __init__(self, service_group):
+        self.group = service_group
 
     def check_running_snapshot_transaction(self):
         if os.path.exists(os.path.join(
-                self.service.service_path, ".drudder-snapshot.lock")):
+                self.group.group_dir, ".drudder-snapshot.lock")):
             output = subprocess.check_output(
                 "ps aux | grep drudder | grep -v grep | wc -l",
                 shell=True).decode("utf-8", "ignore")
@@ -2655,9 +2904,9 @@ class Snapshots(object):
                 return True
             print_msg("warning: stale snapshot lock found but no process " +\
                 "appears to be left around, removing.",
-                color="yellow", service=self.service.name)
+                color="yellow", group=self.group.name)
             # No longer running, remove file:
-            os.remove(os.path.join(self.service.service_path,
+            os.remove(os.path.join(self.group.group_dir,
                 ".drudder-snapshot.lock"))
         return False
 
@@ -2690,46 +2939,75 @@ class Snapshots(object):
             needs btrfs subvolume conversion. Print a warning if not.
         """
         fs = SystemInfo.filesystem_type_at_path(
-            self.service.service_path)
+            self.group.group_dir)
         if fs != "btrfs":
             return False
 
         self.btrfs_tool_check()
 
-        if os.path.exists(os.path.join(self.service.service_path,
-                "livedata")):
+        for service in self.group.services:
             try:
-                if not SystemInfo.is_btrfs_subvolume(os.path.join(
-                        self.service.service_path, "livedata"))\
-                        and len(self.service.rw_volumes) > 0:
-                    if self.service.is_running():
-                        if print_errors:
+                for volume in service.rw_volumes:
+                    if not volume.is_covered_by_service_backups(
+                            service):
+                        if volume.known_host_mount != None and \
+                                os.path.exists(volume.known_host_mount) and \
+                                not os.path.isdir(volume.known_host_mount):
                             print_msg(
-                                "the livedata/ dir of this service will " +\
-                                "still need to be converted to " +\
-                                "a subvolume to enable snapshots.\n" + \
-                                "Fix it by doing this:\n" + \
-                                "1. Stop the service with: drudder "+\
-                                    "stop " +\
-                                    self.service.name + "\n" + \
-                                "2. Snapshot the service once with: " +\
-                                    "drudder "+\
-                                    "snapshot " + self.service.name + "\n",
-                                service=self.service.name, color="yellow")
-                    else:
-                        if print_errors:
-                            print_msg("the livedata/ dir of " +\
-                                "this service still " +\
-                                "needs conversion to btrfs subvolume.\n" +\
-                                "Fix it by snapshotting it once with: " +\
-                                "drudder "+\
-                                "snapshot " + self.service.name + "\n",
-                                service=self.service.name, color="yellow")
-                    return False
-            except ValueError:
+                                "the volume " + str(volume) +
+                                " of this service won't get snapshotted, " +
+                                "because it isn't a directory",
+                                service=service.name,
+                                group=self.group.name,
+                                color="yellow")
+                        else:
+                            print_msg(
+                                "the volume " + str(volume) +
+                                " of this service won't get snapshotted, " +
+                                "because it is not mounted " +
+                                "outside of the service " +
+                                "group folder (" + self.group.group_dir + ")",
+                                service=service.name,
+                                group=self.group.name,
+                                color="yellow")
+                    elif volume.known_host_mount == None or \
+                            not SystemInfo.is_btrfs_subvolume(
+                            volume.known_host_mount):
+                        if service.running:
+                            if print_errors:
+                                print_msg(
+                                    "the volume " + str(volume) + " " +
+                                    "still needs to be converted to " +
+                                    "a subvolume to enable snapshots.\n" +
+                                    "Fix it by doing this:\n" +
+                                    "1. Stop the service with: drudder "+
+                                        "stop " +
+                                        self.group.name + "\n" +
+                                    "2. Snapshot the service once with: " +
+                                        "drudder "+
+                                        "snapshot " + self.group.name + "\n",
+                                    service=service.name,
+                                    group=self.group.name,
+                                    color="yellow")
+                        else:
+                            if print_errors:
+                                print_msg("the volume " + str(volume) + " " +
+                                    "of this service still " +
+                                    "needs conversion to a btrfs " +
+                                    "subvolume.\n" +
+                                    "Fix it by snapshotting it once with: " +
+                                    "drudder "+
+                                    "snapshot " + self.group.name + "\n",
+                                    service=service.name,
+                                    group=self.group.name,
+                                    color="yellow")
+                        return False
+            except Exception as e:
                 print_msg("there was a problem. btrfs snapshotting won't " +\
-                          "work as intended.", \
-                          service=self.service.name, color="red")
+                    "work as intended. Error details: " + str(e),
+                    service=service.name,
+                    group=self.group.name,
+                    color="red")
                 return False
         # Everything seems fine so far.
         return True
@@ -2956,10 +3234,14 @@ class Snapshots(object):
                 for err in e.args[0]:
                     src, dst, msg = err
                     if str(msg).startswith("[Errno 6]"):
-                        # This occurs with Unix socekts. Check if it is one:
+                        # This occurs with Unix sockets. Check if it is one:
                         mode = os.stat(src).st_mode
                         if stat.S_ISSOCK(mode):
                             continue # It is. Skip it!
+                        else:
+                            print_msg("warning: errno 6 when accessing " +
+                                "file, but os.stat says no unix socket: " +
+                                src, color="yellow")
                     # This is an unknown error we most likely care about:
                     relevant_errors.append(err)
                 if len(relevant_errors) > 0:
@@ -3050,7 +3332,27 @@ class Snapshots(object):
             snapshot_name)
         print_msg("copying to " + snapshot_specific_dir,
             service=self.service.name)
-        shutil.copytree(snapshot_dir, snapshot_specific_dir, symlinks=True)
+        try:
+            shutil.copytree(snapshot_dir, snapshot_specific_dir, symlinks=True)
+        except shutil.Error as e:
+            # Check for errors we care about:
+            relevant_errors = []
+            for err in e.args[0]:
+                src, dst, msg = err
+                if str(msg).startswith("[Errno 6]"):
+                    # This occurs with Unix sockets. Check if it is one:
+                    mode = os.stat(src).st_mode
+                    if stat.S_ISSOCK(mode):
+                        continue # It is. Skip it!
+                    else:
+                        print_msg("warning: errno 6 when accessing " +
+                            "file, but os.stat says no unix socket: " +
+                            src, color="yellow")
+                # This is an unknown error we most likely care about:
+                relevant_errors.append(err)
+            if len(relevant_errors) > 0:
+                e.args[0] = relevant_errors
+                raise e 
         subprocess.check_output([SystemInfo.btrfs_path(), "subvolume",
             "delete", snapshot_dir])
         assert(not os.path.exists(snapshot_dir))
@@ -3074,7 +3376,7 @@ class TargetsParser(object):
         return targets.strip().split(" ")
 
     @staticmethod
-    def get_containers(targets, print_error=False):
+    def get_services(targets, print_error=False):
         while targets.find("  ") >= 0:
             targets.replace("  ", " ")
         result = set()
@@ -3092,62 +3394,62 @@ class TargetsParser(object):
 
             # Specific treatment of the "all" keyword:
             if target == "all":
-                for service in Service.all():
-                    for container in service.containers:
+                for group in ServiceGroup.all():
+                    for service in group.services:
                         if not negated:
-                            result.add(container)
+                            result.add(service)
                         else:
                             try:
-                                result.remove(container)
+                                result.remove(service)
                             except KeyError:
                                 pass
                 continue
 
-            # Examine the current service/container entry:
-            service_name = target.partition("/")[0]
-            service = Service.find_by_name(service_name)
-            if service == None:
+            # Examine the current group[/service] entry:
+            group_name = target.partition("/")[0]
+            group = ServiceGroup.find_by_name(group_name)
+            if group == None:
                 if print_error:
                     print("drudder: error: " + \
-                        "no such service found: " + str(service_name),
+                        "no such service group found: " +\
+                        str(group_name),
                         file=sys.stderr)
                 return None
 
-            # See if a specific container is specified or jst all of them:
-            container_name = target.partition("/")[2]
-            if len(container_name) == 0: # all containers:
-                containers = service.containers
-                if len(containers) == 0:
-                    print_msg("warning: specified service has no " +\
-                        "containers", color="yellow", service=service.name)
-            else: # a specific container. find it by name:
-                containers = []
-                for service_container in service.containers:
-                    if service_container.name == container_name:
-                        containers = [ service_container ]
-                        break
+            # See if a specific service is specified, or just all of them:
+            service_name = target.partition("/")[2]
+            if len(service_name) == 0: # all services:
+                services = group.services
+                if len(services) == 0:
+                    print_msg("warning: specified group has no " +\
+                        "services", color="yellow", group=group.name)
+            else: # a specific service. find it by name:
+                services = []
+                for service in group.services:
+                    if service.name == service_name:
+                        services.append(service)
                 # Check if the container was found by name or not:
-                if len(containers) == 0:
+                if len(services) == 0:
                     if print_error:
                         print("drudder: error: " + \
-                            "no such container for service \"" +\
-                            str(service_name) + "\" found: " +\
-                            str(container_name),
+                            "no such service in group \"" +\
+                            str(group_name) + "\" found: " +\
+                            str(service_name),
                             file=sys.stderr)
                     return None
             # Add/remove all containers collected by this entry:
-            for container in containers:
+            for service in services:
                 if not negated:
-                    result.add(container)
+                    result.add(service)
                 else:
                     try:
-                        result.remove(container)
+                        result.remove(service)
                     except KeyError:
                         pass
         return list(result)
 
     @staticmethod
-    def get_services(targets, print_error=False):
+    def get_groups(targets, print_error=False):
         while targets.find("  ") >= 0:
             targets.replace("  ", " ")
         result = set()
@@ -3164,60 +3466,60 @@ class TargetsParser(object):
 
             # Specific treatment of the "all" keyword:
             if target == "all":
-                for service in Service.all():
+                for group in ServiceGroup.all():
                     if not negated:
-                        result.add(service)
+                        result.add(group)
                     else:
                         try:
-                            result.remove(service)
+                            result.remove(group)
                         except KeyError:
                             pass
                 return list(result)
-            service = Service.find_by_name(target.partition("/")[0])
-            if service == None:
+            group = ServiceGroup.find_by_name(target.partition("/")[0])
+            if group == None:
                 if print_error:
                     print("drudder: error: " + \
-                        "no such service found: " + str(
+                        "no such group found: " + str(
                         target.partition("/")[0]),
                         file=sys.stderr)
                 return None
             if not negated:
-                result.add(service)
+                result.add(group)
             else:
                 try:
-                    result.remove(service)
+                    result.remove(group)
                 except KeyError:
                     pass
         return list(result)
 
-class ContainerLinkDependencyNode(object):
+class ServiceLinkDependencyNode(object):
     """ A node in the dependency graph of container dependencies.
         Has incoming and outgoing link edges, and has an associated container.
     """
-    def __init__(self, container, incoming_links, outgoing_links, graph):
+    def __init__(self, service, incoming_links, outgoing_links, graph):
         self.incoming_links = incoming_links
         self.outgoing_links = outgoing_links
-        self.container = container
+        self.service = service
         self.graph = graph
 
     def __repr__(self):
-        return "<ContainerLinkDependencyNode " + str(self.container) +\
+        return "<ServiceLinkDependencyNode " + str(self.service) +\
             " (" +\
-            ", ".join([str(self.container) + " -> " + str(link.container)\
+            ", ".join([str(self.service) + " -> " + str(link.service)\
                 for link in self.outgoing_links]) + ")>"
 
     def __hash__(self):
-        return hash(str(self.container.name))
+        return hash(self.__repr__())
 
     def __eq__(self, other):
         if other == None:
             return False
-        if not hasattr(other, "container") or \
+        if not hasattr(other, "service") or \
                 not hasattr(other, "incoming_links") or \
                 not hasattr(other, "outgoing_links") or \
                 not hasattr(other, "graph"):
             return False
-        if other.container == self.container:
+        if other.service == self.service:
             if other.graph != self.graph:
                 return False
             return True
@@ -3226,22 +3528,22 @@ class ContainerLinkDependencyNode(object):
     def __neq__(self, other):
         return not self.__eq__(other)
 
-    def fulfills_dependencies(self, containers):
-        nodes = [self.graph[container] for container in running_containers]
+    def fulfills_dependencies(self, services):
+        nodes = [self.graph[service] for service in services]
         for outgoing_link in self.outgoing_links:
             if not outgoing_link in nodes:
                 return False
         return True
 
-    def is_depending_on(self, containers):
-        nodes = [self.graph[container] for container in running_containers]
+    def is_depending_on(self, services):
+        nodes = [self.graph[service] for service in services]
         for outgoing_link in self.outgoing_links:
             if outgoing_link in nodes:
                 return True
         return False
 
-    def is_dependency_of(self, containers):
-        nodes = [self.graph[container] for container in running_containers]
+    def is_dependency_of(self, services):
+        nodes = [self.graph[service] for service in services]
         for incoming_link in self.outgoing_links:
             if incoming_link in nodes:
                 return True
@@ -3253,24 +3555,24 @@ class DoAlongDependencyEdges(object):
 
         It constructs a subgraph according to the following rules:
 
-        - the graph will be made of the specified initial_containers list,
+        - the graph will be made of the specified initial_services list,
           and then gradually grown along all the outgoing edges or,
           alternatively with along_incoming=True, along all the incoming
           edges to the maximum extent
 
-        You can then yield containers in this subgraph in the partial order
+        You can then yield services in this subgraph in the partial order
         laid out by the connections it was grown along, starting with the root
         nodes, then their children, etc.
 
-        This allows you to apply a function to all yielded containers in
+        This allows you to apply a function to all yielded services in
         order, e.g. launching them.
 
-        See the iterators DoAlongDependencyEdges.unprocessed_containers() or
-        DoAlongDependencyEdges.failed_containers() for details on how the
-        containers of this subgraph can be yielded.
+        See the iterators DoAlongDependencyEdges.unprocessed_services() or
+        DoAlongDependencyEdges.failed_services() for details on how the
+        services of this subgraph can be yielded.
     """
     def __init__(self, dependency_resolution_object,
-            initial_containers,
+            initial_services,
             along_incoming=False, expand_initial_set=True,
             reverse_yield_order=False):
         self.access_lock = threading.Lock()
@@ -3278,10 +3580,10 @@ class DoAlongDependencyEdges(object):
         self.expand_initial_set = expand_initial_set
         self.along_incoming = along_incoming
         self.graph = dependency_resolution_object.graph
-        self.containers = initial_containers
+        self.services = initial_services
         self.start_set = set()
-        for container in initial_containers:
-            self.start_set.add(self.graph[container])
+        for service in initial_services:
+            self.start_set.add(self.graph[service])
         self.marked_done = set()
         self.marked_failed = set()
         self.yielded_nodes = set()
@@ -3291,9 +3593,9 @@ class DoAlongDependencyEdges(object):
         # Grow to the relevant subgraph which can be possibly returned:
         expand_queue = queue.Queue()
         self.subgraph = {}
-        for container in initial_containers: # queue up initial containers
-            self.subgraph[container] = self.graph[container]
-            expand_queue.put(self.subgraph[container])
+        for service in initial_services: # queue up initial services
+            self.subgraph[service] = self.graph[service]
+            expand_queue.put(self.subgraph[service])
         if expand_initial_set:
             while not expand_queue.empty(): # crawl through graph and grow it
                 expand_node = expand_queue.get()
@@ -3303,8 +3605,8 @@ class DoAlongDependencyEdges(object):
                 else:
                     expanded_nodes = expand_node.outgoing_links
                 for expanded_node in expanded_nodes:
-                    if not expanded_node.container in self.subgraph:
-                        self.subgraph[expanded_node.container] = expanded_node
+                    if not expanded_node.service in self.subgraph:
+                        self.subgraph[expanded_node.service] = expanded_node
                         expand_queue.put(expanded_node)
 
     def __iter__(self):
@@ -3385,7 +3687,7 @@ class DoAlongDependencyEdges(object):
                 predecessors = get_predecessors(next_node)
                 reachable = True
                 for predecessor in predecessors:
-                    if not predecessor.container in self.subgraph:
+                    if not predecessor.service in self.subgraph:
                         continue
                     if not predecessor in self.marked_done:
                         # Nope, at least one predecessor isn't done yet.
@@ -3403,7 +3705,7 @@ class DoAlongDependencyEdges(object):
                 if not next_node in self.marked_failed:
                     # It's a succeeded node, therefore look at the successors:
                     for successor in get_successors(next_node):
-                        if not successor.container in self.subgraph:
+                        if not successor.service in self.subgraph:
                             continue
                         if not successor in seen:
                             seen.add(successor)
@@ -3412,23 +3714,23 @@ class DoAlongDependencyEdges(object):
         # Return assembled candidates:
         return candidates
 
-    def mark_success(self, container):
-        """ Mark a container as succeeded. This opens up all the direct
-            dependencies of this container to be returned from
-            unprocessed_containers() as next unprocessed containers to be
+    def mark_success(self, service):
+        """ Mark a service as succeeded. This opens up all the direct
+            dependencies of this service to be returned from
+            unprocessed_services() as next unprocessed services to be
             taken care of.
         """
         self.access_lock.acquire()
-        self.marked_done.add(self.graph[container])
+        self.marked_done.add(self.graph[service])
         self.access_lock.release()
 
-    def mark_failure(self, container):
-        """ Mark a container as failed. No container depending on this one
-            will be considered for yielding for unprocessed_containers()
+    def mark_failure(self, service):
+        """ Mark a service as failed. No service depending on this one
+            will be considered for yielding for unprocessed_services()
             anymore.
         """
         self.access_lock.acquire()
-        self.marked_failed.add(self.graph[container])
+        self.marked_failed.add(self.graph[service])
         self.access_lock.release()
 
     def _next_unprocessed_node(self):
@@ -3438,7 +3740,7 @@ class DoAlongDependencyEdges(object):
             
             Calling this function continuously will gradually yield all
             unprocessed nodes that are obtainable (see
-            unprocessed_containers() for details), and None if there is
+            unprocessed_services() for details), and None if there is
             currently no unprocessed node that can be returned.
         """
 
@@ -3501,7 +3803,7 @@ class DoAlongDependencyEdges(object):
         self.access_lock.release()
         return result
 
-    def unprocessed_containers(self):
+    def unprocessed_services(self):
         """ This function returns an iterator which yields the items according
             to the order specified in the DoAlongDependencyEdges class
             description.
@@ -3509,16 +3811,16 @@ class DoAlongDependencyEdges(object):
             However, it introduces two additional criteria (while maintaing
             the order implicated by the subgraph):
 
-            - a container can only be yielded as soon as all the direct
+            - a service can only be yielded as soon as all the direct
               predecessors are marked as "succeeded" with mark_success().
 
-            - all containers where any direct or indirect predecessors were
+            - all services where any direct or indirect predecessors were
               marked as "failed" with mark_failure() will be ignored and not
               yielded at all.
 
-            If containers cannot be yielded because the first criterion
+            If services cannot be yielded because the first criterion
             isn't fulfilled and they weren't discarded through the second
-            criterion yet and if all containers that could have been yielded
+            criterion yet and if all services that could have been yielded
             so far have been yielded, the iterator will hang and wait for
             this situation to be resolved through further mark_success()/
             mark_failure() calls.
@@ -3553,24 +3855,24 @@ class DoAlongDependencyEdges(object):
                     # Make sure we only expand beyond initial set if we were
                     # supposed to do that:
                     if not self.doalongobj.expand_initial_set and \
-                            not node.container in self.doalongobj.containers:
+                            not node.service in self.doalongobj.services:
                         # Skip this, it would expand beyond initial set.
                         skipped = True
                         continue
                     break
-                return node.container
+                return node.service
         return UnprocessedContainersIterator(self)
 
-    def failed_containers(self):
-        """ This function returns an iterator which yields containers
+    def failed_services(self):
+        """ This function returns an iterator which yields services
             in no particular order which fulfill the following criterion:
 
-            - containers which have been marked as "failed" or where any
+            - services which have been marked as "failed" or where any
               direct or indirect predecessors were marked as "failed" with
               mark_failure() will be yielded
 
-            If containers have neither met by this criterion, nor been marked
-            as succeeded and if all containers that could have been yielded so
+            If services have neither met by this criterion, nor been marked
+            as succeeded and if all services that could have been yielded so
             far have been yielded already, this iterator will hang and wait
             for this situation to be resolved through further mark_success()/
             mark_failure() calls.
@@ -3583,48 +3885,48 @@ class DoAlongDependencyEdges(object):
         raise NotImplementedError("not implemented at this point")
 
 class ContainerLinkDependencyResolution(object):
-    """ This class builds a graph based on the container.dependencies (which
-        are themselves constructed from the docker links of each container).
+    """ This class builds a graph based on the service.dependencies (which
+        are themselves constructed from the docker links of each service).
 
         This graph can then be used with DoAlongDependencyEdges to do things
         according to the dependency order.
     """
-    def __init__(self, containers):
-        self.containers = containers
+    def __init__(self, services):
+        self.services = services
         self.graph = dict()
 
-        # Add all containers as nodes without arcs:
-        for container in self.containers:
-            if not container in self.graph:
-                self.graph[container] = ContainerLinkDependencyNode(
-                    container, [], [], self.graph)
+        # Add all services as nodes without arcs:
+        for service in self.services:
+            if not service in self.graph:
+                self.graph[service] = ServiceLinkDependencyNode(
+                    service, [], [], self.graph)
 
-        # Go through containers again and add arcs:
+        # Go through services again and add arcs:
         node_added = True
         while node_added:
             node_added = False
-            for container in self.containers:
-                source_node = self.graph[container]
-                for dependency in container.dependencies:
-                    dep_container = None
+            for service in self.services:
+                source_node = self.graph[service]
+                for dependency in service.dependencies:
+                    dep_service = None
                     try:
-                        dep_container = dependency.container
+                        dep_service = dependency.service
                     except ValueError:
                         print("drudder: error: dependency for " +\
-                            str(container) + " is not in known services, " +\
+                            str(service) + " is not in known services, " +\
                             "can't resolve dependency chain: " +\
                             str(dependency), file=sys.stderr)
                         sys.exit(1)
 
                     # Make sure the target for our new arc is in the graph:
-                    if not dep_container in self.graph:
-                        self.graph[dep_container] = \
-                            ContainerLinkDependencyNode(
-                            dep_container, [], [], self.graph)
+                    if not dep_service in self.graph:
+                        self.graph[dep_service] = \
+                            ServiceLinkDependencyNode(
+                            dep_service, [], [], self.graph)
                         node_added = True
 
                     # Obtain target node ref:
-                    target_node = self.graph[dep_container]
+                    target_node = self.graph[dep_service]
 
                     # Add arcs in both directions, if any is missing:
                     if not target_node in source_node.incoming_links:
@@ -3638,16 +3940,16 @@ class ContainerLinkDependencyResolution(object):
     def print_graph_debug(self):
         print("Graph:")
         seen = set()
-        for container in self.graph:
-            node = self.graph[container]
+        for service in self.graph:
+            node = self.graph[service]
             for outgoing in node.outgoing_links:
                 assert(node in outgoing.incoming_links)
-                print(str(node.container) + " -> " + str(outgoing.container))
-                seen.add(node.container)
-                seen.add(outgoing.container)
-        for container in self.graph:
-            if not container in seen:    
-                print(str(container))
+                print(str(node.service) + " -> " + str(outgoing.service))
+                seen.add(node.service)
+                seen.add(outgoing.service)
+        for service in self.graph:
+            if not service in seen:    
+                print(str(service))
         print("End of Graph.")
 
 class ContainerStatusInfo(object):
@@ -3663,7 +3965,8 @@ class ContainerStatusInfo(object):
             dict_class = OrderedDict
         info = dict_class()
         info["Canonical docker container name"] = \
-            self.container.default_container_name 
+            self.container.default_container_id 
+        info["Container id"] = self.container.container_id
         info["Owning service"] = OrderedDict()
         info["Owning service"]["Name"] = self.container.service.name
         info["Owning service"]["Location"] = \
@@ -3782,34 +4085,49 @@ def main():
 
     # Check if services are btrfs ready, and give warning if not:
     if args.action != "snapshot" and args.action != "info":
-        for service in Service.all():
-            snapshots = Snapshots(service)
+        for service_group in ServiceGroup.all():
+            snapshots = Snapshots(service_group)
             snapshots.subvolume_readiness_check()
 
     # --- Main handling of actions here:
 
     if args.action == "list":
-        all_services = Service.all()
-        print("\033[1mService list (" + str(len(all_services)) +\
-            " service(s)):\033[0m")
-        for service in all_services:
+        all_groups = ServiceGroup.all()
+        print("\033[1mService Group list (" + str(len(all_groups)) +\
+            " group(s)):\033[0m")
+        for group in all_groups:
             state = ""
-            running_names = service._get_running_service_container_names()
-            all_names = [container.name for container in service.containers]
-            if len(all_names) == 0:
-                state = "\033[1;33mservice has no containers" +\
+            running_services = []
+            stopped_services = []
+            for service in group.services:
+                containers = [container for container in service.containers]
+                running_containers = [container for container in containers if \
+                    container.running]
+                if len(running_containers) > 0:
+                    running_services.append(service)
+                else:
+                    stopped_services.append(service)
+            if len(running_services) + len(stopped_services) == 0:
+                state = "\033[1;33mgroup has no services" +\
                     "\033[0m"
-            elif len(running_names) == len(all_names):
-                state = "\033[1;32mrunning\033[0m"
-            elif len(running_names) > 0:
-                state = "\033[1;33mpartial (running: " +\
-                    ", ".join(running_names) + ", not running: " +\
-                    ", ".join([name for name in all_names\
-                        if name not in running_names]) + ")\033[0m"
+            elif len(stopped_services) == 0:
+                state = "\033[1;32mrunning (" +\
+                    " ".join([service.name for service in \
+                        running_services]) + ")\033[0m"
+            elif len(running_services) > 0:
+                state = "\033[1;33mpartial (" +\
+                    ", ".join([service.name for service in \
+                        running_services]) +\
+                    "), others stopped (" +\
+                    ", ".join([service.name for service in \
+                        stopped_services]) + ")\033[0m"
             else:
-                state = "\033[1;31mstopped\033[0m"
-            print("\033[0m  - \033[1m" + service.name + "\033[0m (" + \
-                service.service_path + "): " + state)
+                state = "\033[1;31mstopped (" +\
+                    ", ".join([service.name for service in \
+                        stopped_services]) +\
+                        ")\033[0m"
+            print("\033[0m  - \033[1mgroup " + group.name + "\033[0m (" + \
+                group.group_dir + "): " + state)
     elif args.action == "help":
         parser.print_help()
         sys.exit(1)
@@ -3819,61 +4137,66 @@ def main():
                 "of the service for which docker logs shold be printed, "+\
                 "or \"all\"", file=sys.stderr)
             sys.exit(1)
-        containers = TargetsParser.get_containers(" ".join(args.argument),
+        services = TargetsParser.get_services(" ".join(args.argument),
             print_error=True)
-        if containers == None:
+        if services == None:
             sys.exit(1)
-        for container in containers:
-            print_msg("printing log of container " + str(container),
-                service=container.service.name, color='blue')
-            try:
-                retcode = subprocess.call([SystemInfo.docker_path(), "logs",
-                        container.current_running_instance_name],
-                        stderr=subprocess.STDOUT)
-                if retcode != 0:
-                    raise subprocess.CalledProcessError(
-                        retcode, " ".join([SystemInfo.docker_path(), "logs"]))
-            except subprocess.CalledProcessError:
-                print_msg("failed printing logs. " +\
-                    "Maybe container has no logs yet?",
-                    service=container.service.name,
-                    container=container.name, color='yellow')
-                pass
-    elif args.action == "rebuild":
+        for service in services:
+            for container in service.containers:
+                print_msg("printing log of container " + str(container),
+                    service=service.name,
+                    group=service.group.name, color='blue')
+                try:
+                    retcode = subprocess.call([SystemInfo.docker_path(), "logs",
+                            container.container_id],
+                            stderr=subprocess.STDOUT)
+                    if retcode != 0:
+                        raise subprocess.CalledProcessError(
+                            retcode, " ".join([SystemInfo.docker_path(),
+                            "logs", container.container_id]))
+                except subprocess.CalledProcessError:
+                    print_msg("failed printing logs. " +\
+                        "Maybe container has no logs yet?",
+                        service=service.name,
+                        group=service.group.name,
+                        color='yellow')
+                    pass
+    elif args.action == "rebuild" or args.action == "build":
         if len(args.argument) == 0:
             print("drudder: error: please specify the name " + \
-                "of the service for which an interactive shell " +\
-                "should be started",
+                "of the service which should be " +\
+                ("" if args.action == "build" else "re") + "built",
                 file=sys.stderr)
             sys.exit(1)
-        containers = TargetsParser.get_containers(" ".join(args.argument),
+        services = TargetsParser.get_services(" ".join(args.argument),
             print_error=True)
-        if containers == None:
+        if services == None:
             sys.exit(1)
-        for container in containers:
-            if container.running:
-                print_msg("cannot safely recreate container, " +\
-                    "one or more of the specified " +\
-                    "containers is/are currently running: " +\
-                    str(", ".join([
-                        str(container) for container in containers])),
-                    color="red")
-                print("drudder: error: aborted rebuilding")
-                sys.exit(1)
         some_failed = False
-        for container in containers:
-            print_msg("rebuilding container with no cache",
-                service=container.service.name, container=container.name,
+        for service in services:
+            print_msg(
+                "rebuilding container with no cache" if \
+                    args.action == "rebuild" else "building container",
+                service=service.name,
+                group=service.group.name,
                 color="blue")
             try:
-                subprocess.check_call([SystemInfo.docker_compose_path(),
-                    "build",
-                    "--no-cache", "--pull", container.name],
-                    cwd=container.service.service_path)
+                if args.action == "rebuild":
+                    subprocess.check_call([SystemInfo.docker_compose_path(),
+                        "build",
+                        "--no-cache", "--pull", service.name],
+                        cwd=service.group_dir)
+                else:
+                    subprocess.check_call([SystemInfo.docker_compose_path(),
+                        "build", service.name],
+                        cwd=service.group_dir)
             except subprocess.CalledProcessError as e:
                 some_failed = True
                 print_msg("Build failure (exit code " +\
-                    str(e.returncode) + ")", color="red")
+                    str(e.returncode) + ")",
+                    service=service.name,
+                    group=service.group.name,
+                    color="red")
         if some_failed:
             print_msg("Rebuilding completed with errors.", color="red")
             sys.exit(1)
@@ -3882,132 +4205,203 @@ def main():
     elif args.action == "shell":
         if len(args.argument) == 0:
             print("drudder: error: please specify the name " + \
-                "of the service for which an interactive " +\
+                "of the group or service for which an interactive " +\
                 "shell should be started",
                 file=sys.stderr)
             sys.exit(1)
-        containers = TargetsParser.get_containers(" ".join(args.argument),
+        services = TargetsParser.get_services(" ".join(args.argument),
             print_error=True)
-        if containers == None:
+        if services == None:
             sys.exit(1)
-        if len(containers) != 1:
+        if len(services) != 1:
             print("drudder: error: this command can only be used " + \
-                "on a single container, but the given argument \"" +\
+                "on a single services, but the given argument \"" +\
                 " ".join(args.argument) +\
                 "\" matches multiple " +\
-                "containers: " +\
-                ", ".join([str(container) for container in containers]),
+                "services: " +\
+                ", ".join([str(service) for service in services]),
                 file=sys.stderr)
             sys.exit(1)
-        if containers[0].running:
-            cname = containers[0].current_running_instance_name
+        running_containers = services[0].running_containers
+        if len(running_containers) > 0:
+            containers = services[0].running_containers
+            cname = containers[0].container_id
             print_msg("attaching to running container " + str(cname),
-                service=containers[0].service.name,
+                group=services[0].group.name,
+                service=services[0].name,
                 color="blue")
             subprocess.call([SystemInfo.docker_path(), "exec", "-t", "-i",
                     str(cname), "/bin/bash"],
                 stderr=subprocess.STDOUT)
         else:
-            print_msg("launching container " + str(containers[0]) + \
-                " with shell",
-                service=containers[0].service.name,
+            print_msg("launching container for service " +
+                str(services[0].name) + " with shell",
+                group=services[0].group.name,
+                service=services[0].name,
                 color="blue")
-            image_name = containers[0].image_name
             subprocess.call([SystemInfo.docker_compose_path(), "build",
-                containers[0].name], cwd=containers[0].service.service_path)
+                services[0].name],
+                cwd=services[0].group_dir)
             subprocess.call([SystemInfo.docker_compose_path(), "run",
-                containers[0].name, "/bin/bash"],
-                cwd=containers[0].service.service_path)
+                services[0].name, "/bin/bash"],
+                cwd=services[0].group_dir)
     elif args.action == "start" or args.action == "restart":
         if len(args.argument) == 0:
             print("drudder: error: please specify the name " + \
                 "of the service to be started, or \"all\"", file=sys.stderr)
             sys.exit(1)
-        containers = TargetsParser.get_containers(" ".join(args.argument),
+        services = TargetsParser.get_services(" ".join(args.argument),
             print_error=True)
-        if containers == None:
+        if services == None:
             sys.exit(1)
-        if len(containers) == 0:
+        if len(services) == 0:
             sys.exit(0)
 
+        # Create a dependency resolution graph which we use for partial
+        # order dependency resolution for parallel launches:
         resolution = ContainerLinkDependencyResolution(
-            Service.all_containers())
+            Service.all())
 
+        # Create a launch tracker used later for parallel launches:
         tracker = FailedLaunchTracker()
         scheduled_action = "restart"
         if args.action == "start":
             scheduled_action = "start"
 
-        # Stop all indirect dependencies and the containers themselves:
+        # Rebuild all containers of our core restart group
+        print_lock = threading.Lock()
+        counter = { "count" : 0, "total" : 0 }
+        class RebuildThread(threading.Thread):
+            def __init__(self, service, print_lock, counter):
+                super().__init__()
+                self.service = service
+                self.done = False
+                self.counter = counter
+
+            def run(self):
+                output = None
+                try:
+                    output = subprocess.check_output([
+                        SystemInfo.docker_compose_path(), "build",
+                        self.service.name],
+                        cwd=self.service.group_dir,
+                        stderr=subprocess.STDOUT)
+                except subprocess.CalledProcessError as e:
+                    output = e.output
+                print_lock.acquire()
+                try:
+                    output = output.decode("utf-8", "replace")
+                except AttributeError:
+                    pass
+                print(output)
+                self.counter["count"] += 1
+                print_msg("BUILD PROCESS: " + str(self.counter["count"]) + "/"
+                    + str(self.counter["total"]) + " services", color="blue")
+                print_lock.release()
+                self.done = True
+        tlist = []
+        for service in services:
+            counter["total"] += 1
+            print_msg("rebuilding... " +\
+                "(this service is rebuilt for a fresh " +
+                "up-to-date restart, since it was scheduled for " +
+                scheduled_action + "ing)",
+                service=service.name,
+                group=service.group.name,
+                color="blue")
+            tlist.append(RebuildThread(service, print_lock, counter)) 
+        for t in tlist:
+            t.start()
+        all_done = False
+        while not all_done:
+            all_done = True
+            for t in tlist:
+                if not t.done:
+                    all_done = False
+            time.sleep(2)
+
         restart_dependencies = set()
         if scheduled_action == "restart":
+            # Rebuild services to be restarted, and stop all services to be
+            # restarted including their indirect dependencies:
+
+            # Create a graph traversal helper:
             unreversed_stop_before_restart = \
-                DoAlongDependencyEdges(resolution, containers,
+                DoAlongDependencyEdges(resolution, services,
                 along_incoming=True)
             stop_before_restart = []
-            for container in \
-                    unreversed_stop_before_restart.unprocessed_containers():
-                stop_before_restart.append(container)
-                unreversed_stop_before_restart.mark_success(container)
+
+            # Collect all indirect dependencies that need to be stopped:
+            # (starts out with restart container set, and grows gradually
+            # outwards to outer indirect dependencies)
+            for service in \
+                    unreversed_stop_before_restart.unprocessed_services():
+                stop_before_restart.append(service)
+                unreversed_stop_before_restart.mark_success(service)
+
+            # Reverse list so we have the "most outer" services first:
             stop_before_restart = list(reversed(stop_before_restart))
-            for container in stop_before_restart:
-                if not container in containers:
+
+            # Do the stopping:
+            for service in stop_before_restart:
+                if not service in services:
                     print_msg("stopping... " +\
-                        "(this container is depending on 1+ " +\
-                        "of the container(s) scheduled for restart)",
-                        service=container.service.name,
-                        container=container.name,
+                        "(this service is depending on 1+ " +\
+                        "of the service(s) scheduled for restart)",
+                        service=service.name,
+                        group=service.group.name,
                         color="blue")
-                    restart_dependencies.add(container)
+                    restart_dependencies.add(service)
                 else:
                     print_msg("stopping... " +\
-                        "(this container was scheduled for " +\
+                        "(this service was scheduled for " +\
                         scheduled_action + ")",
-                        service=container.service.name,
-                        container=container.name,
+                        service=service.name,
+                        group=service.group.name,
                         color="blue")
-                LaunchThreaded.stop(container)
+                LaunchThreaded.stop(service)
 
         # Helper function to launch a service:
         threads = []
-        def start_container(container, is_last=False,
+        def start_service(service, is_last=False,
                 do_on_failure=None, do_on_success=None):
-            if container.running:
-                if container in containers:
-                    print_msg("already running. (this container was " +\
+            if service.running:
+                if service in services:
+                    print_msg("already running. (this service was " +\
                             "scheduled for " +\
                             scheduled_action + ")",
-                        service=container.service.name,\
-                        container=container.name,
+                        group=service.group.name,
+                        service=service.name,
                         color="green")
-                elif container in restart_dependencies:
+                elif service in restart_dependencies:
                     print_msg("already running. " +\
-                            "(this container was " +\
+                            "(this service was " +\
                             "an external dependency on the " +\
                             scheduled_action +\
                             "ed containers) - " +\
-                            "weird, didn't we stop it before??",
-                        service=container.service.name,\
-                        container=container.name,
+                            "weird, didn't we stop it before?? (" +
+                            "if you can reproduce this, report it)",
+                        service=service.name,
+                        group=service.group.name,
                         color="yellow")
                 else:
-                    print_msg("already running. (this container is " +\
-                            "a dependency of a container scheduled for " +\
+                    print_msg("already running. (this service is " +\
+                            "a dependency of a service scheduled for " +\
                             scheduled_action + ")",
-                        service=container.service.name,\
-                        container=container.name,
+                        service=service.name,
+                        group=service.group.name,
                         color="green")
                 if do_on_success != None:
                     do_on_success()
                 return
             if not is_last:
-                t = LaunchThreaded.attempt_launch(container,
+                t = LaunchThreaded.attempt_launch(service,
                     failed_launch_tracker=tracker,
                     force_container_recreation=(args.force is True),
                     do_on_failure=do_on_failure,
                     do_on_success=do_on_success)
             else:
-                t = LaunchThreaded.attempt_launch(container,
+                t = LaunchThreaded.attempt_launch(services,
                     failed_launch_tracker=tracker,
                     to_background_timeout=None,
                     force_container_recreation=(args.force is True),
@@ -4023,33 +4417,33 @@ def main():
             return lambda: net.mark_failure(container)
 
         # Start the dependencies of our container launch set:
-        start_dependency_containers = \
-            DoAlongDependencyEdges(resolution, containers,
+        start_dependency_services = \
+            DoAlongDependencyEdges(resolution, services,
             along_incoming=False, expand_initial_set=True,
             reverse_yield_order=True)
-        for container in start_dependency_containers.unprocessed_containers():
-            if container in containers: # not a dependency
-                start_dependency_containers.mark_success(container)
+        for service in start_dependency_services.unprocessed_services():
+            if service in services: # not a dependency
+                start_dependency_services.mark_success(service)
                 continue
             # Launch it:
-            start_container(container, is_last=False,
+            start_service(service, is_last=False,
                 do_on_failure=mark_failure_func(
-                    start_dependency_containers, container),
+                    start_dependency_services, service),
                 do_on_success=mark_success_func(
-                    start_dependency_containers, container))
+                    start_dependency_services, service))
 
         # Start everything again:
-        start_containers = \
-            DoAlongDependencyEdges(resolution, set(containers).union(\
+        start_services = \
+            DoAlongDependencyEdges(resolution, set(services).union(\
                 restart_dependencies),
                 along_incoming=False, expand_initial_set=False,
                 reverse_yield_order=True)
-        for container in start_containers.unprocessed_containers():
-            start_container(container, is_last=False,
+        for service in start_services.unprocessed_services():
+            start_service(service, is_last=False,
                 do_on_failure=mark_failure_func(
-                    start_containers, container),
+                    start_services, service),
                 do_on_success=mark_success_func(
-                    start_containers, container))
+                    start_services, service))
 
         # Wait until launches are finished:
         LaunchThreaded.wait_for_launches(threads)
@@ -4064,23 +4458,25 @@ def main():
             print("drudder: error: please specify the name " + \
                 "of the service to be stopped, or \"all\"", file=sys.stderr)
             sys.exit(1)
-        containers = TargetsParser.get_containers(" ".join(args.argument),
+        services = TargetsParser.get_services(" ".join(args.argument),
             print_error=True)
-        if containers == None:
+        if services == None:
             sys.exit(1)
-        for container in containers:
-            assert(container != None)
-            if container.running:
-                print_msg("stopping...", service=container.service.name,
-                    container=container.name,
+        for service in services:
+            assert(service != None)
+            if service.running:
+                print_msg("stopping...",
+                    service=service.name,
+                    group=service.group.name,
                     color="blue")
-                LaunchThreaded.stop(container)
-                print_msg("stopped.", service=container.service.name,
-                    container=container.name, color="green")
+                LaunchThreaded.stop(service)
+                print_msg("stopped.",
+                    service=service.name,
+                    group=service.group.name, color="green")
             else:
                 print_msg("not currently running.",
-                    service=container.service.name,
-                    container=container.name,
+                    service=service.name,
+                    group=service.group.name,
                     color="blue")
         sys.exit(0)
     elif args.action == "snapshot":
@@ -4089,7 +4485,7 @@ def main():
                 "of the service to be snapshotted, or \"all\"",
                 file=sys.stderr)
             sys.exit(1)
-        services = TargetsParser.get_services(" ".join(args.argument),
+        services = TargetsParser.get_groups(" ".join(args.argument),
             print_error=True)
         return_error = False
         for service in services:
@@ -4115,7 +4511,7 @@ def main():
                 "of the service or container to print info for, " +\
                 "or \"all\"", file=sys.stderr)
             sys.exit(1)
-        containers = TargetsParser.get_containers(" ".join(args.argument),
+        containers = TargetsParser.get_services(" ".join(args.argument),
             print_error=True)
         if containers == None:
             sys.exit(1)
@@ -4223,7 +4619,7 @@ def main():
                 "of the service or container to print info for, " +\
                 "or \"all\"", file=sys.stderr)
             sys.exit(1)
-        containers = TargetsParser.get_containers(" ".join(args.argument),
+        containers = TargetsParser.get_services(" ".join(args.argument),
             print_error=True)
         if containers == None:
             sys.exit(1)
@@ -4259,7 +4655,7 @@ def main():
             print(serialize(info))
         sys.exit(0)
     elif args.action == "clean":
-        Service.global_clean_up(args.force != True)
+        ServiceGroup.global_clean_up(args.force != True)
     else:
         unknown_action()
 
