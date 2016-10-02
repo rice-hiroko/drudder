@@ -441,13 +441,21 @@ class GlobalConfig(object):
                     os.environ["HOME"], ".config", "drudder",
                     "config.yml")
         if os.path.exists("/etc/drudder/config.yml") and \
-                config_path == None:
-            config_path = "/etc/drudder/config.yml"
+                self.config_path == None:
+            self.config_path = "/etc/drudder/config.yml"
 
         # Read config:
-        if config_path != None:
-            with open(config_path, "r") as f:
-                self.data = yaml.safe_load(f.read())
+        if self.config_path != None:
+            try:
+                with open(self.config_path, "r") as f:
+                    self.data = yaml.safe_load(f.read())
+            except Exception as e:
+                print("drudder: error: FATAL: couldn't open or parse " +
+                    "global config at: " + str(self.config_path),
+                    flush=True, file=sys.stderr)
+                print("drudder: error: FATAL: config read error is: " +
+                    str(e), flush=True, file=sys.stderr)
+                sys.exit(1)
 
     def get(self, value_path, default=None, _base_obj=None):
         parts = value_path.split(".")
@@ -461,6 +469,7 @@ class GlobalConfig(object):
                 return default
             return self.get(parts[1:], default=default, _base_obj=result)
         return result
+gc = GlobalConfig()
 
 class ExecutionCache(object):
     def __init__(self, duration_ms=600):
