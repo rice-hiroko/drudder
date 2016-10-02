@@ -34,6 +34,7 @@ go elsewhere.
 
 # Usage
 
+Check out the [full documentation here](docs/index.md).
 
 ## Basics
 
@@ -91,21 +92,27 @@ maintenance.
 
 # Installation
 
-Copy the drudder script to /usr/bin/ and set execution bit (chmod +x)
+First, make sure a recent Python 3 (3.3 or newer) is installed on your
+system.
+Then, copy the drudder script to /usr/bin/ and set execution bit
+(chmod +x).
 Then run: ```sudo drudder install-tools```
 
 
 # HOW TO add your service
 
 drudder expects services to be grouped with the help of docker-compose /
-docker-compose.yml. The script will scan the following locations for
-services subfolders with a docker-compose.yml in them:
+docker-compose.yml (or alternatively a [drudder.yml for advanced
+features](docs/drudder.yml.md)). The script will scan the following
+locations for services subfolders with a docker-compose.yml in them:
 
 - the current working directory when running the script
 - /usr/share/docker-services/  
 - /srv/
 
-Each service folder inside one of those locatoins should contain:
+You can add more using [the global drudder config](docs/config.md).
+
+Each service folder inside one of those locations should contain:
 
 - docker-compose.yml to launch it. (folders without this file are skipped)
 - livedata/ subfolder where all read-write volumes are mounted to
