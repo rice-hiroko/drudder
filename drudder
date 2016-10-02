@@ -821,6 +821,7 @@ class Installer(object):
                 if next_block_start < 0 or (next_block_start_2 >= 0 and \
                         next_block_start_2 < next_block_start):
                     next_block_start = next_block_start_2
+                pos = max(pos + 1, next_block_start)
                 if next_block_start < 0:
                     return None
                 # Get the end to the block:
