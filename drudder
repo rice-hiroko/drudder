@@ -158,7 +158,7 @@ freely, subject to the following restrictions:
 
     2. Always run "drudder snapshot all" before you make your backup to get
        consistent snapshots of your writable volumes in a subfolder named
-       livedata-snapshpots/ in each respective service folder.
+       livedata-snapshots/ in each respective service folder.
 
 
 
