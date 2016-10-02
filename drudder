@@ -427,6 +427,41 @@ class SubprocessHelper(object):
             cmd, shell=shell, cwd=cwd, env=env, stdout=stdout, stderr=stderr,
             pty=True, copy_to_regular_stdout_stderr=False)
 
+class GlobalConfig(object):
+    def __init__(self):
+        self.config_path = None
+        self.data = dict()
+
+        # Locate config, if any:
+        if "HOME" in os.environ:
+            if os.path.exists(os.path.join(
+                    os.environ["HOME"], ".config", "drudder",
+                    "config.yml")):
+                self.config_path = os.path.join(
+                    os.environ["HOME"], ".config", "drudder",
+                    "config.yml")
+        if os.path.exists("/etc/drudder/config.yml") and \
+                config_path == None:
+            config_path = "/etc/drudder/config.yml"
+
+        # Read config:
+        if config_path != None:
+            with open(config_path, "r") as f:
+                self.data = yaml.safe_load(f.read())
+
+    def get(self, value_path, default=None, _base_obj=None):
+        parts = value_path.split(".")
+        if base_obj == None:
+            base_obj = self.data
+        result = base_obj.get(parts[0])
+        if result == None:
+            return default
+        if len(parts) > 1:
+            if not isinstance(result, dict):
+                return default
+            return self.get(parts[1:], default=default, _base_obj=result)
+        return result
+
 class ExecutionCache(object):
     def __init__(self, duration_ms=600):
         self.duration = duration_ms * 0.001
@@ -508,7 +543,7 @@ class CommandLineArgumentParser(object):
             "install-tools": install and upgrade all required tools like
                              docker-machine and docker-compose on the local
                              computer. This will automatically fetch and provide
-                             anything to require drudder.
+                             anything required to run drudder.
      
             "list": list all known services.
 
