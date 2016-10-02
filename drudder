@@ -428,6 +428,11 @@ class SubprocessHelper(object):
             pty=True, copy_to_regular_stdout_stderr=False)
 
 class GlobalConfig(object):
+    """ GlobalConfig is the reader for the global drudder config file provided
+        by the user. Once instantiated, it will load up the config and you can
+        obtain the config values using the get() member.
+    """
+
     def __init__(self):
         self.config_path = None
         self.data = dict()
@@ -458,16 +463,27 @@ class GlobalConfig(object):
                 sys.exit(1)
 
     def get(self, value_path, default=None, _base_obj=None):
+        """ Retrieve the value at the given path key1.subkey2.value
+            in the config dictionary (as described by the YAML).
+
+            Returns the default instead if the value is not present.
+        """
+
         parts = value_path.split(".")
         if base_obj == None:
             base_obj = self.data
+
+        # Get value at first path element:
         result = base_obj.get(parts[0])
         if result == None:
             return default
+
+        # Recurse deeper if the path is longer than one element:
         if len(parts) > 1:
             if not isinstance(result, dict):
                 return default
             return self.get(parts[1:], default=default, _base_obj=result)
+
         return result
 gc = GlobalConfig()
 
