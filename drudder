@@ -2573,8 +2573,12 @@ class ServiceGroup(object):
                 parts = parts[:4] + [ '' ] + parts[4:]
             if parts[4] == "" or parts[4].startswith("Exited "):
                 print_msg("deleting stopped container " + parts[0] + "...")
-                subprocess.check_output([SystemInfo.docker_path(),
-                    "rm", parts[0]])
+                try:
+                    subprocess.check_output([SystemInfo.docker_path(),
+                        "rm", parts[0]])
+                except subprocess.CalledProcessError:
+                    print_msg("warning: failed to delete container " +
+                        parts[0], color="yellow")
         print_msg("cleaning up unneeded images...")
         subprocess.check_output([SystemInfo.docker_path(), "rmi",
             "$(docker images -aq"], shell=True)
