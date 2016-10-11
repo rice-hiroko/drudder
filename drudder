@@ -55,6 +55,7 @@ freely, subject to the following restrictions:
 
     # Usage
 
+    Check out the [full documentation here](docs/index.md).
 
     ## Basics
 
@@ -111,21 +112,27 @@ freely, subject to the following restrictions:
 
     # Installation
 
-    Copy the drudder script to /usr/bin/ and set execution bit (chmod +x).
+    First, make sure a recent Python 3 (3.3 or newer) is installed on your
+    system.
+    Then, copy the drudder script to /usr/bin/ and set execution bit
+    (chmod +x).
     Then run: ```sudo drudder install-tools```
 
 
     # HOW TO add your service
 
     drudder expects services to be grouped with the help of docker-compose /
-    docker-compose.yml. The script will scan the following locations for
-    services subfolders with a docker-compose.yml in them:
+    docker-compose.yml (or alternatively a [drudder.yml for advanced
+    features](docs/drudder.yml.md)). The script will scan the following
+    locations for services subfolders with a docker-compose.yml in them:
 
     - the current working directory when running the script
     - /usr/share/docker-services/
     - /srv/
 
-    Each service folder inside one of those locatoins should contain:
+    You can add more using [the global drudder config](docs/config.md).
+
+    Each service folder inside one of those locations should contain:
 
     - docker-compose.yml to launch it. (folders without this file are skipped)
     - livedata/ subfolder where all read-write volumes are mounted to
@@ -151,7 +158,7 @@ freely, subject to the following restrictions:
 
     2. Always run "drudder snapshot all" before you make your backup to get
        consistent snapshots of your writable volumes in a subfolder named
-       livedata-snapshpots/ in each respective service folder.
+       livedata-snapshots/ in each respective service folder.
 
 
 
@@ -420,6 +427,66 @@ class SubprocessHelper(object):
             cmd, shell=shell, cwd=cwd, env=env, stdout=stdout, stderr=stderr,
             pty=True, copy_to_regular_stdout_stderr=False)
 
+class GlobalConfig(object):
+    """ GlobalConfig is the reader for the global drudder config file provided
+        by the user. Once instantiated, it will load up the config and you can
+        obtain the config values using the get() member.
+    """
+
+    def __init__(self):
+        self.config_path = None
+        self.data = dict()
+
+        # Locate config, if any:
+        if "HOME" in os.environ:
+            if os.path.exists(os.path.join(
+                    os.environ["HOME"], ".config", "drudder",
+                    "config.yml")):
+                self.config_path = os.path.join(
+                    os.environ["HOME"], ".config", "drudder",
+                    "config.yml")
+        if os.path.exists("/etc/drudder/config.yml") and \
+                self.config_path == None:
+            self.config_path = "/etc/drudder/config.yml"
+
+        # Read config:
+        if self.config_path != None:
+            try:
+                with open(self.config_path, "r") as f:
+                    self.data = yaml.safe_load(f.read())
+            except Exception as e:
+                print("drudder: error: FATAL: couldn't open or parse " +
+                    "global config at: " + str(self.config_path),
+                    flush=True, file=sys.stderr)
+                print("drudder: error: FATAL: config read error is: " +
+                    str(e), flush=True, file=sys.stderr)
+                sys.exit(1)
+
+    def get(self, value_path, default=None, _base_obj=None):
+        """ Retrieve the value at the given path key1.subkey2.value
+            in the config dictionary (as described by the YAML).
+
+            Returns the default instead if the value is not present.
+        """
+
+        parts = value_path.split(".")
+        if base_obj == None:
+            base_obj = self.data
+
+        # Get value at first path element:
+        result = base_obj.get(parts[0])
+        if result == None:
+            return default
+
+        # Recurse deeper if the path is longer than one element:
+        if len(parts) > 1:
+            if not isinstance(result, dict):
+                return default
+            return self.get(parts[1:], default=default, _base_obj=result)
+
+        return result
+gc = GlobalConfig()
+
 class ExecutionCache(object):
     def __init__(self, duration_ms=600):
         self.duration = duration_ms * 0.001
@@ -501,7 +568,7 @@ class CommandLineArgumentParser(object):
             "install-tools": install and upgrade all required tools like
                              docker-machine and docker-compose on the local
                              computer. This will automatically fetch and provide
-                             anything to require drudder.
+                             anything required to run drudder.
      
             "list": list all known services.
 
@@ -829,6 +896,7 @@ class Installer(object):
                 if next_block_start < 0 or (next_block_start_2 >= 0 and \
                         next_block_start_2 < next_block_start):
                     next_block_start = next_block_start_2
+                pos = max(pos + 1, next_block_start)
                 if next_block_start < 0:
                     return None
                 # Get the end to the block:

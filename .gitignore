@@ -1,4 +1,8 @@
-*
+/*
 !.gitignore
 !README.md
 !docker-services.py
+!docs
+*~
+*.swp
+*.swo
