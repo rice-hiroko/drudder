@@ -1347,7 +1347,7 @@ class SystemInfo(object):
             raise ValueError(details)
 
         # Get btrfs subvolume list:
-        output = SubprocessHelper.check_output_with_isolated_pty([
+        output = subprocess.check_output([
             SystemInfo.locate_binary("btrfs"),
             "subvolume", "list", path]).\
             decode("utf-8", "ignore").strip().split("\n")
