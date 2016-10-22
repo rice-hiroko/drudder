@@ -1360,6 +1360,8 @@ class SystemInfo(object):
                     " Full output: " + str(output))
             line = line[line.find(" path ")+len(" path "):].strip()
             full_path_guess = mount + os.path.sep + line
+            full_path_guess = full_path_guess.replace(
+                os.path.sep + os.path.sep, os.path.sep)  # remove double slash
             if not os.path.exists(full_path_guess):
                 if line == "DELETED":
                     continue
