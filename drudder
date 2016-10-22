@@ -437,17 +437,21 @@ class GlobalConfig(object):
         self.config_path = None
         self.data = dict()
 
+    def open(self, read_from_path=None):
         # Locate config, if any:
-        if "HOME" in os.environ:
-            if os.path.exists(os.path.join(
-                    os.environ["HOME"], ".config", "drudder",
-                    "config.yml")):
-                self.config_path = os.path.join(
-                    os.environ["HOME"], ".config", "drudder",
-                    "config.yml")
-        if os.path.exists("/etc/drudder/config.yml") and \
-                self.config_path == None:
-            self.config_path = "/etc/drudder/config.yml"
+        if not read_from_path:
+            if "HOME" in os.environ:
+                if os.path.exists(os.path.join(
+                        os.environ["HOME"], ".config", "drudder",
+                        "config.yml")):
+                    self.config_path = os.path.join(
+                        os.environ["HOME"], ".config", "drudder",
+                        "config.yml")
+            if os.path.exists("/etc/drudder/config.yml") and \
+                    self.config_path == None:
+                self.config_path = "/etc/drudder/config.yml"
+        else:
+            self.config_path = read_from_path
 
         # Read config:
         if self.config_path != None:
@@ -613,6 +617,11 @@ class CommandLineArgumentParser(object):
                 "respective warning prompted by an action to understand the "+\
                 "consequences",
             dest="force")
+        parser.add_argument("--config-path", "-c",
+            default=None, dest="config_path",
+            help="Specific path to read the global drudder config from. If not " +\
+            "specified, it will be searched and opened from default locations: " +\
+            "$HOME/.config/drudder/config.yml, /etc/drudder/config.yml")
         return parser
 
 # Abort early before attempting to install missing packages when --help or
@@ -2659,6 +2668,13 @@ class ServiceGroup(object):
                 continue
             subprocess.check_output([SystemInfo.docker_path(),
                 "volume", "rm", vol])
+        print_msg("cleaning up container logs...")
+        for f in os.listdir("/var/lib/docker/"):
+            for fname in os.path.join("/var/lib/docker/", f):
+                if fname.endswith("-json.log"):
+                    subprocess.check_output([
+                        "truncate", "-s", "0",
+                        os.path.join("/var/lib/docker/", f)])
 
     @property
     def services(self):
@@ -2890,72 +2906,6 @@ class Permissions:
             perm_dict["livedata-permissions"] = dict()
 
         return perm_dict
-
-parser = argparse.ArgumentParser(description=textwrap.dedent('''\
-    drudder: a tool for managing a larger collection of
-    docker-compose.yml-specified container groups simply.'''
-    ),
-    formatter_class=DoubleLineBreakFormatter)
-parser.add_argument("action",
-    help=textwrap.dedent('''\
-    Possible values:
-    
-    "list": list all known services.
-
-    "start": start the service specified as argument (or "all" for all).
-
-    "stop": stop the service specified as argument (or "all" for all).
-
-    "restart": restart the service specified as argument (or "all" for all).
-
-    "info": show more detailed info for the given service (or "all for
-            all).
-
-    "logs": output the logs of all the docker containers of the service
-            specified as argument (or "all" for all).
-
-    "shell": start an interactive shell in the specified service's specified
-             subservice. The argument is:
-               <service>[/<subservice>]
-               e.g.: drudder shell myownservice/datcoolsubservice
-             The subservice can be omitted from the argument if the
-             docker-compose.yml has just one container/subservice.
-
-    "snapshot": store an atomic snapshot of the live data of the service
-                specified as argument (from livedata/) in livedata-snapshots/
-
-    "clean": clean up all stopped containers and all dangling volumes.
-             THIS IS NOT REVERSIBLE. The docker images won't be touched.
-
-    "dump-container-info" : dump all sorts of detailed container info as YAML.
-                            Mainly useful if you want to process the combined
-                            data computed by drudder with another tool
-                            of yours.
-
-    "install-tools" : install all required components and tools to run drudder
-                      on this computer
-    ''')
-
-    )
-parser.add_argument("argument", nargs="*", help="argument(s) to given action")
-parser.add_argument("--version", help="show version and quit",
-    default=False, action="store_true",
-    dest="show_version")
-parser.add_argument("--force",
-    default=False, action="store_true",
-    help="Can be used to override various safety warnings. Consult the "+\
-        "respective warning prompted by an action to understand the "+\
-        "consequences",
-    dest="force")
-if __name__ == "__main__":
-    if len(" ".join(sys.argv[1:]).strip()) == 0:
-        parser.print_help()
-        sys.exit(1)
-    for arg in sys.argv[1:]:
-        if arg == "--version" or arg == "-v" or arg == "-V":
-            print("drudder version " + str(TOOL_VERSION))
-            sys.exit(0)
-    args = parser.parse_args()
 
 ensure_docker = SystemInfo.docker_path()
 ensure_docker_compose = SystemInfo.docker_compose_path()
@@ -4008,6 +3958,61 @@ class ContainerLinkDependencyResolution(object):
                     break
         # Done! Graph complete
 
+    def compute_cliques(self, service_subset=None):
+        """ Returns a list of sets of cliques in the service graph.
+        """
+        if len(self.graph.keys()) == 0:
+            return []
+        cliques = [set([list(self.graph.keys())[0]])]
+        def grow_clique(node_clique):
+            result = copy.copy(node_clique)
+            something_changed = True
+            while something_changed:
+                something_changed = False
+                add_services = set()
+                for service in result:
+                    node = self.graph[service]
+                    for neighbor in node.incoming_links:
+                        add_services.add(neighbor.service)
+                    for neighbor in node.outgoing_links:
+                        add_services.add(neighbor.service)
+                result = result.union(add_services)
+            return result
+
+        # Processing loop of our clique algorithm:
+        while True:
+            new_cliques = []
+            for clique in cliques:
+                new_cliques.append(grow_clique(clique))
+            cliques = new_cliques
+            found_missing = False
+            for service in self.graph:
+                service_found = False
+                for clique in cliques:
+                    if service in clique:
+                        service_found = True
+                        break
+                if not service_found:
+                    found_missing = True
+                    cliques.append(set([service]))
+                    break
+            if not found_missing:
+                break
+
+        # Remove duplicate cliques, and trim to given subset:
+        if service_subset == None:
+            service_subset = self.graph.keys()
+        else:
+            if not type(service_subset) == set:
+                service_subset = set(service_subset)
+        result = []
+        for clique in cliques:
+            clique_clipped = clique.intersection(service_subset)
+            if clique_clipped in result:
+                continue
+            result.append(clique_clipped)
+        return result 
+
     def print_graph_debug(self):
         print("Graph:")
         seen = set()
@@ -4175,6 +4180,8 @@ def main():
             print("drudder version " + str(TOOL_VERSION))
             sys.exit(0)
     args = parser.parse_args()
+    print("CONFIG PATH: " + str(args.config_path))
+    gc.open(read_from_path=args.config_path)
 
     ensure_docker = SystemInfo.docker_path()
     ensure_docker_compose = SystemInfo.docker_compose_path()
@@ -4380,6 +4387,9 @@ def main():
         scheduled_action = "restart"
         if args.action == "start":
             scheduled_action = "start"
+
+        # Get all cliques of our dependency graph:
+        cliques = resolution.compute_cliques()
 
         # Rebuild all containers of our core restart group
         bulk_build_services(services,
