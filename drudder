@@ -4513,11 +4513,15 @@ def main():
         class CliqueThread(threading.Thread):
             def __init__(self, clique, print_mutex):
                 super().__init__()
-                self.services = clique
+                self.services = clique.intersection(set(services))
                 self.done = False
                 self.mutex = print_mutex
 
             def run(self):
+                if len(self.services) == 0:
+                    self.done = True
+                    return
+
                 # Rebuild all containers of our core restart group
                 if not args.no_rebuild and args.action == "restart":
                     bulk_build_services(self.services,
