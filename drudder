@@ -2614,7 +2614,8 @@ class ServiceGroup(object):
                 "It will also delete all volumes that are neither "+\
                 "a host-mounted directory, nor are currently owned by any "+\
                 "currently existing container (in short, all dangling "+\
-                "volumes).\n\n(Avoid this warning next time " +\
+                "volumes). It will also wipe all container logs." +\
+                "\n\n(Avoid this warning next time " +\
                 "with --force)\n\n" +\
                 "Are you sure you want to continue? [Enter y/N]")
             if not answer == "y" and not answer == "Y":
