@@ -4306,7 +4306,7 @@ def main():
         if services == None:
             sys.exit(1)
         some_failed = not bulk_build_services(services,
-            "this service is rebuilt with no cache due to "
+            "this service is now being rebuilt with no cache due to "
             "a \"rebuild\" command having been issued",
             force_complete_rebuild=True)
 
