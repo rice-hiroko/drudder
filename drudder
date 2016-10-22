@@ -2675,7 +2675,7 @@ class ServiceGroup(object):
                 if fname.endswith("-json.log"):
                     subprocess.check_output([
                         "truncate", "-s", "0",
-                        os.path.join("/var/lib/docker/", f)])
+                        os.path.join("/var/lib/docker/", f, fname)])
 
     @property
     def services(self):
