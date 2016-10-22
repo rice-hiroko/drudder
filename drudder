@@ -4098,6 +4098,69 @@ class ContainerStatusInfo(object):
             info["Volumes"].append(vol_info)
         return info
 
+def bulk_build_services(services, reason, force_complete_rebuild=False):
+    # Rebuild all containers of our core restart group
+    print_lock = threading.Lock()
+    counter = { "count" : 0, "total" : 0,
+        "some_failed" : False }
+    class RebuildThread(threading.Thread):
+        def __init__(self, service, print_lock, counter):
+            super().__init__()
+            self.service = service
+            self.done = False
+            self.counter = counter
+
+        def run(self):
+            output = None
+            try:
+                if not force_complete_rebuild:
+                    output = subprocess.check_output([
+                        SystemInfo.docker_compose_path(), "build",
+                        self.service.name],
+                        cwd=self.service.group_dir,
+                        stderr=subprocess.STDOUT)
+                else:
+                    output = subprocess.check_output([
+                        SystemInfo.docker_compose_path(),
+                        "build",
+                        "--no-cache", "--pull", self.service.name],
+                        cwd=self.service.group_dir,
+                        stderr=subprocess.STDOUT)
+            except subprocess.CalledProcessError as e:
+                output = e.output
+                counter["some_failed"] = True
+            print_lock.acquire()
+            try:
+                output = output.decode("utf-8", "replace")
+            except AttributeError:
+                pass
+            print(output.rstrip())
+            self.counter["count"] += 1
+            print_msg("BUILD PROCESS: " + str(self.counter["count"]) + "/"
+                + str(self.counter["total"]) + " services", color="blue")
+            print_lock.release()
+            self.done = True
+    tlist = []
+    for service in services:
+        counter["total"] += 1
+        print_msg("rebuilding... " +\
+            "(" + reason + ")",
+            service=service.name,
+            group=service.group.name,
+            color="blue")
+        tlist.append(RebuildThread(service, print_lock, counter)) 
+    for t in tlist:
+        t.start()
+    all_done = False
+    while not all_done:
+        all_done = True
+        for t in tlist:
+            if not t.done:
+                all_done = False
+        time.sleep(2)
+    return not counter["some_failed"]
+
+
 def main():
     if not yaml_available:
         yaml_error()
@@ -4115,7 +4178,6 @@ def main():
 
     ensure_docker = SystemInfo.docker_path()
     ensure_docker_compose = SystemInfo.docker_compose_path()
-
 
     def unknown_action(hint=None):
         """ Print an error that the given action to drudder is invalid,
@@ -4243,35 +4305,15 @@ def main():
             print_error=True)
         if services == None:
             sys.exit(1)
-        some_failed = False
-        for service in services:
-            print_msg(
-                "rebuilding container with no cache" if \
-                    args.action == "rebuild" else "building container",
-                service=service.name,
-                group=service.group.name,
-                color="blue")
-            try:
-                if args.action == "rebuild":
-                    subprocess.check_call([SystemInfo.docker_compose_path(),
-                        "build",
-                        "--no-cache", "--pull", service.name],
-                        cwd=service.group_dir)
-                else:
-                    subprocess.check_call([SystemInfo.docker_compose_path(),
-                        "build", service.name],
-                        cwd=service.group_dir)
-            except subprocess.CalledProcessError as e:
-                some_failed = True
-                print_msg("Build failure (exit code " +\
-                    str(e.returncode) + ")",
-                    service=service.name,
-                    group=service.group.name,
-                    color="red")
+        some_failed = not bulk_build_services(services,
+            "this service is rebuilt with no cache due to "
+            "a \"rebuild\" command having been issued",
+            force_complete_rebuild=True)
+
         if some_failed:
             print_msg("Rebuilding completed with errors.", color="red")
             sys.exit(1)
-        print_msg("Rebuilding complete.", color="green")
+        print_msg("Rebuilding complete without errors.", color="green")
         sys.exit(0)
     elif args.action == "shell":
         if len(args.argument) == 0:
@@ -4340,56 +4382,10 @@ def main():
             scheduled_action = "start"
 
         # Rebuild all containers of our core restart group
-        print_lock = threading.Lock()
-        counter = { "count" : 0, "total" : 0 }
-        class RebuildThread(threading.Thread):
-            def __init__(self, service, print_lock, counter):
-                super().__init__()
-                self.service = service
-                self.done = False
-                self.counter = counter
-
-            def run(self):
-                output = None
-                try:
-                    output = subprocess.check_output([
-                        SystemInfo.docker_compose_path(), "build",
-                        self.service.name],
-                        cwd=self.service.group_dir,
-                        stderr=subprocess.STDOUT)
-                except subprocess.CalledProcessError as e:
-                    output = e.output
-                print_lock.acquire()
-                try:
-                    output = output.decode("utf-8", "replace")
-                except AttributeError:
-                    pass
-                print(output)
-                self.counter["count"] += 1
-                print_msg("BUILD PROCESS: " + str(self.counter["count"]) + "/"
-                    + str(self.counter["total"]) + " services", color="blue")
-                print_lock.release()
-                self.done = True
-        tlist = []
-        for service in services:
-            counter["total"] += 1
-            print_msg("rebuilding... " +\
-                "(this service is rebuilt for a fresh " +
-                "up-to-date restart, since it was scheduled for " +
-                scheduled_action + "ing)",
-                service=service.name,
-                group=service.group.name,
-                color="blue")
-            tlist.append(RebuildThread(service, print_lock, counter)) 
-        for t in tlist:
-            t.start()
-        all_done = False
-        while not all_done:
-            all_done = True
-            for t in tlist:
-                if not t.done:
-                    all_done = False
-            time.sleep(2)
+        bulk_build_services(services,
+            "this service is rebuilt for a fresh " +
+            "up-to-date restart, since it was scheduled for " +
+            scheduled_action + "ing")
 
         restart_dependencies = set()
         if scheduled_action == "restart":
