@@ -234,6 +234,16 @@ import time
 import traceback
 import uuid
 
+def clear_text(text, allow_line_breaks=True):
+    cleared_text = ""
+    for c in text:
+        if ord(c) < 32 and ((c != "\n"
+                and c != "\n") or not allow_line_breaks):
+            cleared_text += " "
+        else:
+            cleared_text += c
+    return cleared_text
+
 class SubprocessHelper(object):
     @staticmethod
     def check_output_with_stdout_copy(cmd, shell=False, stdout=None,
@@ -622,6 +632,11 @@ class CommandLineArgumentParser(object):
             help="Specific path to read the global drudder config from. If not " +\
             "specified, it will be searched and opened from default locations: " +\
             "$HOME/.config/drudder/config.yml, /etc/drudder/config.yml")
+        parser.add_argument("--no-rebuild",
+            default=False, action="store_true",
+            dest="no_rebuild",
+            help="Avoid automatic rebuilding if not absolutely required to " +\
+            "execute the given action")
         return parser
 
 # Abort early before attempting to install missing packages when --help or
@@ -1668,6 +1683,10 @@ def print_msg(text, group=None,
     elif color == "green":
         info_msg = "SUCCESS"
 
+    text = clear_text(text, allow_line_breaks=False)
+
+    ENABLE_COLORS=True
+
     def color_code():
         part = "\033[1;"
         if color == "blue":
@@ -1680,11 +1699,16 @@ def print_msg(text, group=None,
             part += "32"
         elif color == "white":
             part += "37"
+        if not ENABLE_COLORS:
+            return ""
         return part + "m"
 
     service_part = ""
     if group != None and len(group) > 0:
-        service_part = "\033[0m" + color_code() + group
+        if ENABLE_COLORS:
+            service_part = "\033[0m" + color_code() + group
+        else:
+            service_part = group
         if service != None:
             service_part += "/" + service
             if container != None:
@@ -1699,19 +1723,27 @@ def print_msg(text, group=None,
         initial_length = len("[" + service)
         if container != None:
             initial_length += len("/" + container)
-    initial_length += len("] ") 
+    initial_length += len("] ")
 
-    text_color = "\033[0m"
-    if color == "yellow" or color == "red":
-        text_color += color_code()
+    text_color = ""
+    if ENABLE_COLORS:
+        text_color = "\033[0m"
+        if color == "yellow" or color == "red":
+            text_color += color_code()
 
     # Split lines according to \n\n:
     lines = [line.strip() for line in text.split("\n\n")]
 
     # First line with complicated lead up:
-    print_text = "\033[0m\033[1m[\033[0m" + docker_services_part + \
-        service_part + "\033[0m\033[1m] " + info_msg +\
-        " " + text_color
+    print_text = ""
+    if ENABLE_COLORS:
+        print_text = "\033[0m\033[1m[\033[0m" +\
+            docker_services_part + \
+            service_part + "\033[0m\033[1m] " + info_msg +\
+            " " + text_color
+    else:
+        print_text = "[" + docker_services_part + service_part + "]"
+        print_text += " " + info_msg + " " + text_color
     first_line = True
     for line in lines:
         if first_line:
@@ -1724,8 +1756,9 @@ def print_msg(text, group=None,
             print_text += "\n" + textwrap.fill(line, width=70,
                 initial_indent=(" " * initial_length),
                 subsequent_indent=(" " * initial_length))
-    print_text += "\033[0m"
-    print(print_text)
+    if ENABLE_COLORS:
+        print_text += "\033[0m"
+    print(print_text, flush=True)
 
 class DataVolumeMount(object):
     """ A DataVolumeMount represents a docker volume mount on the host fs
@@ -2152,20 +2185,20 @@ class Service(object):
                     color="yellow")
                 print_mutex.release()
             try:
-                output = subprocess.check_check_output([
+                output = subprocess.check_output([
                     SystemInfo.docker_compose_path(),
                     "rm", "-f", self.name],
                     cwd=self.group.group_dir,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    stderr=subprocess.DEVNULL)
             except subprocess.CalledProcessError as e:
                 output = e.output
             try:
                 output = output.decode("utf-8", "replace")
             except AttributeError:
                 pass
-            print_mutex.acquire()
-            print(output)
-            print_mutex.release()
+            #print_mutex.acquire()
+            #print(clear_text(output))
+            #print_mutex.release()
         else:
             print_mutex.acquire()
             for vol in potentially_lost_volumes:
@@ -2183,14 +2216,14 @@ class Service(object):
                 SystemInfo.docker_compose_path(),
                 "up", "-d", self.name],
                 cwd=self.group.group_dir, stderr=subprocess.STDOUT)
-        except CalledProcessError as e:
+        except subprocess.CalledProcessError as e:
             output = e.output
         try:
             output = output.decode("utf-8", "replace")
         except AttributeError:
             pass
         print_mutex.acquire()
-        print(output)
+        print(clear_text(output), flush=True)
         print_mutex.release()
 
     def __eq__(self, other):
@@ -2650,7 +2683,7 @@ class ServiceGroup(object):
                 "Are you sure you want to continue? [Enter y/N]")
             if not answer == "y" and not answer == "Y":
                 print("drudder: error: cleaning was aborted "+\
-                    "by user.", file=sys.stderr)
+                    "by user.", file=sys.stderr, flush=True)
                 sys.exit(1)
         print_msg("cleaning up stopped containers...")
         output = subprocess.check_output([
@@ -2860,7 +2893,7 @@ class LaunchThreaded(threading.Thread):
                     self.failed_launch_tracker.add(self.service)
                 self.do_on_failure()
             except Exception as e:
-                sellf.print_mutex.acquire()
+                self.print_mutex.acquire()
                 print_msg("failed to launch. (unknown error)",\
                     service=self.service.name,
                     group=self.service.group.name,
@@ -2872,13 +2905,13 @@ class LaunchThreaded(threading.Thread):
                 raise e
         except Exception as e:
             print("UNEXPECTED ERROR", file=sys.stderr)
-            print("ERROR: " + str(e))
+            print("ERROR: " + str(e), flush=True)
             traceback.print_exc()
 
     @staticmethod
     def attempt_launch(service, to_background_timeout=5,
             failed_launch_tracker=None, force_container_recreation=False,
-            do_on_success=None, do_on_failure=None):
+            do_on_success=None, do_on_failure=None, print_mutex=None):
         """ Launch a given service and wait for it to run for a few seconds.
             If that isn't long enough for it to start running, return
             execution to possibly launch further services while this one is
@@ -2889,7 +2922,8 @@ class LaunchThreaded(threading.Thread):
         launch_t = LaunchThreaded(service,
             failed_launch_tracker=failed_launch_tracker,
             do_on_success=do_on_success, do_on_failure=do_on_failure,
-            force_container_recreation=force_container_recreation)
+            force_container_recreation=force_container_recreation,
+            print_mutex=print_mutex)
         launch_t.start()
         
         # Wait for it to complete:
@@ -3483,7 +3517,7 @@ class TargetsParser(object):
                     print("drudder: error: " + \
                         "no such service group found: " +\
                         str(group_name),
-                        file=sys.stderr)
+                        file=sys.stderr, flush=True)
                 return None
 
             # See if a specific service is specified, or just all of them:
@@ -4186,13 +4220,13 @@ def bulk_build_services(services, reason, force_complete_rebuild=False,
             except subprocess.CalledProcessError as e:
                 output = e.output
                 counter["some_failed"] = True
-            print_lock.acquire()
             try:
                 output = output.decode("utf-8", "replace")
             except AttributeError:
                 pass
-            print(output.rstrip())
+            print(clear_text(output.rstrip()), flush=True)
             self.counter["count"] += 1
+            print_lock.acquire()
             print_msg("BUILD PROCESS: " + str(self.counter["count"]) + "/"
                 + str(self.counter["total"]) + " services", color="blue")
             print_lock.release()
@@ -4456,10 +4490,11 @@ def main():
 
             def run(self):
                 # Rebuild all containers of our core restart group
-                bulk_build_services(self.services,
-                    "this service is rebuilt for a fresh " +
-                    "up-to-date restart, since it was scheduled for " +
-                    scheduled_action + "ing", print_mutex=self.mutex)
+                if not args.no_rebuild:
+                    bulk_build_services(self.services,
+                        "this service is rebuilt for a fresh " +
+                        "up-to-date restart, since it was scheduled for " +
+                        scheduled_action + "ing", print_mutex=self.mutex)
 
                 restart_dependencies = set()
                 if scheduled_action == "restart":
@@ -4552,14 +4587,16 @@ def main():
                             failed_launch_tracker=tracker,
                             force_container_recreation=(args.force is True),
                             do_on_failure=do_on_failure,
-                            do_on_success=do_on_success)
+                            do_on_success=do_on_success,
+                            print_mutex=self.mutex)
                     else:
                         t = LaunchThreaded.attempt_launch(service,
                             failed_launch_tracker=tracker,
                             to_background_timeout=None,
                             force_container_recreation=(args.force is True),
                             do_on_failure=do_on_failure,
-                            do_on_success=do_on_success)
+                            do_on_success=do_on_success,
+                            print_mutex=self.mutex)
                     if t != None:
                         threads.append(t)
 
