@@ -244,6 +244,15 @@ def clear_text(text, allow_line_breaks=True):
             cleared_text += c
     return cleared_text
 
+def repair_terminal():
+    """ Since docker-compose and some other tools really don't want to leave
+        the terminal alone, this will reset it to a usable state without
+        the need to actually do a "reset" command that wipes the scrollback.
+    """
+    os.system("stty onlcr")
+    os.system("stty echo")
+    os.system("stty opost")
+
 class SubprocessHelper(object):
     @staticmethod
     def check_output_with_stdout_copy(cmd, shell=False, stdout=None,
@@ -1251,7 +1260,8 @@ class SystemInfo(object):
                 raise ValueError("dangerous character in binary name")
         output = None
         try:
-            output = subprocess.check_output("which " + name, shell=True,
+            output = subprocess.check_output(
+                "which " + name, shell=True,
                 stderr=subprocess.STDOUT).\
                 decode("utf-8", "ignore").strip()
         except subprocess.CalledProcessError:
@@ -1283,7 +1293,8 @@ class SystemInfo(object):
         def behaves_like_docker(binary_path):
             output = None
             try:
-                output = subprocess.check_output([binary_path, "--version"],
+                output = subprocess.check_output([
+                    binary_path, "--version"],
                     stderr=subprocess.STDOUT)
             except subprocess.CalledProcessError as e:
                 output = e.output
@@ -1336,7 +1347,7 @@ class SystemInfo(object):
             raise ValueError(details)
 
         # Get btrfs subvolume list:
-        output = subprocess.check_output([
+        output = SubprocessHelper.check_output_with_isolated_pty([
             SystemInfo.locate_binary("btrfs"),
             "subvolume", "list", path]).\
             decode("utf-8", "ignore").strip().split("\n")
@@ -1758,6 +1769,7 @@ def print_msg(text, group=None,
                 subsequent_indent=(" " * initial_length))
     if ENABLE_COLORS:
         print_text += "\033[0m"
+    repair_terminal()
     print(print_text, flush=True)
 
 class DataVolumeMount(object):
@@ -2044,7 +2056,8 @@ class ServiceContainer(object):
             directory currently mapped to the given container volume path.
         """
         try:
-            output = subprocess.check_output([SystemInfo.docker_path(),
+            output = SubprocessHelper.check_output_with_isolated_pty(
+                [SystemInfo.docker_path(),
                 "inspect",
                 self.container_id],
                 stderr=subprocess.DEVNULL)
@@ -2185,7 +2198,7 @@ class Service(object):
                     color="yellow")
                 print_mutex.release()
             try:
-                output = subprocess.check_output([
+                output = SubprocessHelper.check_output_with_isolated_pty([
                     SystemInfo.docker_compose_path(),
                     "rm", "-f", self.name],
                     cwd=self.group.group_dir,
@@ -2211,11 +2224,13 @@ class Service(object):
                     service=self.service.name,
                     container=self.name, color="yellow")
             print_mutex.release()
+        output = ""
         try:
-            output = subprocess.check_output([
+            output = SubprocessHelper.check_output_with_isolated_pty([
                 SystemInfo.docker_compose_path(),
                 "up", "-d", self.name],
                 cwd=self.group.group_dir, stderr=subprocess.STDOUT)
+            pass
         except subprocess.CalledProcessError as e:
             output = e.output
         try:
@@ -2223,6 +2238,7 @@ class Service(object):
         except AttributeError:
             pass
         print_mutex.acquire()
+        repair_terminal()
         print(clear_text(output), flush=True)
         print_mutex.release()
 
@@ -2686,7 +2702,7 @@ class ServiceGroup(object):
                     "by user.", file=sys.stderr, flush=True)
                 sys.exit(1)
         print_msg("cleaning up stopped containers...")
-        output = subprocess.check_output([
+        output = SubprocessHelper.check_output_with_isolated_pty([
             SystemInfo.docker_path(), "ps", "-a"])
         output = output.decode("utf-8", "ignore").\
             replace("\r", "\n").\
@@ -2715,22 +2731,26 @@ class ServiceGroup(object):
             if parts[4] == "" or parts[4].startswith("Exited "):
                 print_msg("deleting stopped container " + parts[0] + "...")
                 try:
-                    subprocess.check_output([SystemInfo.docker_path(),
+                    SubprocessHelper.check_output_with_isolated_pty([
+                        SystemInfo.docker_path(),
                         "rm", parts[0]])
                 except subprocess.CalledProcessError:
                     print_msg("warning: failed to delete container " +
                         parts[0], color="yellow")
         print_msg("cleaning up unneeded images...")
-        subprocess.check_output([SystemInfo.docker_path(), "rmi",
+        SubprocessHelper.check_output_with_isolated_pty([
+            SystemInfo.docker_path(), "rmi",
             "$(docker images -aq"], shell=True)
         print_msg("cleaning up dangling volumes...")
-        dangling_vols = subprocess.check_output([SystemInfo.docker_path(),
+        dangling_vols = SubprocessHelper.check_output_with_isolated_pty([
+            SystemInfo.docker_path(),
             "volume", "ls", "-qf", "dangling=true"])
         for vol in dangling_vols.splitlines():
             vol = vol.strip()
             if len(vol) == 0:
                 continue
-            subprocess.check_output([SystemInfo.docker_path(),
+            SubprocessHelper.check_output_with_isolated_pty([
+                SystemInfo.docker_path(),
                 "volume", "rm", vol])
         print_msg("cleaning up container logs...")
         for f in os.listdir("/var/lib/docker/"):
@@ -3024,7 +3044,8 @@ class Snapshots(object):
             sys.exit(1)
         output = None
         try:
-            output = subprocess.check_output([SystemInfo.btrfs_path(),
+            output = subprocess.check_output([
+                SystemInfo.btrfs_path(),
                 "--version"],
                 stderr=subprocess.STDOUT).decode("utf-8", "ignore")
         except subprocess.CalledProcessError as e:
@@ -3290,7 +3311,8 @@ class Snapshots(object):
                     + "This is probably a leftover from a previously " + \
                     "aborted attempt. Will now attempt to delete it...",
                     service=self.service.name, color="yellow")
-                subprocess.check_output([SystemInfo.btrfs_path(),
+                subprocess.check_output([
+                    SystemInfo.btrfs_path(),
                     "subvolume",
                     "delete", snapshot_dir])
                 assert(not os.path.exists(snapshot_dir))
@@ -3309,7 +3331,8 @@ class Snapshots(object):
                 + "This is probably a leftover from a previously " + \
                 "aborted attempt. Will now attempt to delete it...",
                 service=self.service.name, color="yellow")
-            output = subprocess.check_output([SystemInfo.btrfs_path(),
+            output = subprocess.check_output([
+                SystemInfo.btrfs_path(),
                 "subvolume",
                 "delete", tempvolume_dir])
             assert(not os.path.exists(tempvolume_dir))
@@ -3320,7 +3343,8 @@ class Snapshots(object):
                 "DON'T TOUCH livedata/ WHILE THIS HAPPENS!!",
                 service=self.service.name, color="yellow")
             try:
-                output = subprocess.check_output([SystemInfo.btrfs_path(),
+                output = subprocess.check_output([
+                    SystemInfo.btrfs_path(),
                     "subvolume",
                     "create", tempvolume_dir])
             except Exception as e:
@@ -3401,7 +3425,8 @@ class Snapshots(object):
         # Go ahead and snapshot:
         print_msg("initiating btrfs snapshot...",
             service=self.service.name)
-        output = subprocess.check_output([SystemInfo.btrfs_path(),
+        output = subprocess.check_output([
+            SystemInfo.btrfs_path(),
             "subvolume", "snapshot",
             "-r", "--", livedata_dir, snapshot_dir])
         
@@ -3457,7 +3482,8 @@ class Snapshots(object):
             if len(relevant_errors) > 0:
                 e.args[0] = relevant_errors
                 raise e 
-        subprocess.check_output([SystemInfo.btrfs_path(), "subvolume",
+        subprocess.check_output([
+            SystemInfo.btrfs_path(), "subvolume",
             "delete", snapshot_dir])
         assert(not os.path.exists(snapshot_dir))
         print_msg("snapshot complete.", service=self.service.name,
@@ -4205,13 +4231,13 @@ def bulk_build_services(services, reason, force_complete_rebuild=False,
             output = None
             try:
                 if not force_complete_rebuild:
-                    output = subprocess.check_output([
+                    output = SubprocessHelper.check_output_with_isolated_pty([
                         SystemInfo.docker_compose_path(), "build",
                         self.service.name],
                         cwd=self.service.group_dir,
                         stderr=subprocess.STDOUT)
                 else:
-                    output = subprocess.check_output([
+                    output = SubprocessHelper.check_output_with_isolated_pty([
                         SystemInfo.docker_compose_path(),
                         "build",
                         "--no-cache", "--pull", self.service.name],
@@ -4224,9 +4250,10 @@ def bulk_build_services(services, reason, force_complete_rebuild=False,
                 output = output.decode("utf-8", "replace")
             except AttributeError:
                 pass
-            print(clear_text(output.rstrip()), flush=True)
             self.counter["count"] += 1
             print_lock.acquire()
+            repair_terminal()
+            print(clear_text(output.rstrip()), flush=True)
             print_msg("BUILD PROCESS: " + str(self.counter["count"]) + "/"
                 + str(self.counter["total"]) + " services", color="blue")
             print_lock.release()
@@ -4490,7 +4517,7 @@ def main():
 
             def run(self):
                 # Rebuild all containers of our core restart group
-                if not args.no_rebuild:
+                if not args.no_rebuild and args.action == "restart":
                     bulk_build_services(self.services,
                         "this service is rebuilt for a fresh " +
                         "up-to-date restart, since it was scheduled for " +
