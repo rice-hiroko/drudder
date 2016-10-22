@@ -4181,7 +4181,6 @@ def main():
             print("drudder version " + str(TOOL_VERSION))
             sys.exit(0)
     args = parser.parse_args()
-    print("CONFIG PATH: " + str(args.config_path))
     gc.open(read_from_path=args.config_path)
 
     ensure_docker = SystemInfo.docker_path()
