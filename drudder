@@ -1129,11 +1129,13 @@ class Installer(object):
                         stderr=subprocess.STDOUT)
                 except subprocess.CalledProcessError as e:
                     if e.output.find(b"E: The method driver " +\
-                            b"/usr/lib/apt/methods/https could not be found") >= 0:
+                            b"/usr/lib/apt/methods/https could not be found"
+                            ) >= 0:
                         print("[Installer/docker] Running: " +\
                             "apt-get install -y docker-engine")
                         SubprocessHelper.check_output_with_stdout_copy(
-                            ["apt-get", "install", "-y", "apt-transport-https"],
+                            ["apt-get", "install", "-y",
+                            "apt-transport-https"],
                             stderr=subprocess.STDOUT)
                         continue
                     raise e
@@ -2967,7 +2969,7 @@ class LaunchThreaded(threading.Thread):
             if launch_t.isAlive():
                 launch_t.join()
 
-class Permissions:
+class Permissions(object):
     """ This represents permissions information parsed from a permssion.yml.
         This allows the administrator to specify permissions that should be
         applied to the live data folder (where usually read-write volumes are
@@ -4901,3 +4903,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
