@@ -2742,9 +2742,22 @@ class ServiceGroup(object):
                     print_msg("warning: failed to delete container " +
                         parts[0], color="yellow")
         print_msg("cleaning up unneeded images...")
-        SubprocessHelper.check_output_with_isolated_pty([
-            SystemInfo.docker_path(), "rmi",
-            "$(docker images -aq"], shell=True)
+        images = SubprocessHelper.check_output_with_isolated_pty([
+            SystemInfo.docker_path(), "images", "-aq"])
+        try:
+            images = images.decode("utf-8")
+        except AttributeError:
+            pass
+        images = [image.strip() for image in images.split("\n") \
+            if len(image.strip()) > 0]
+        for image in images:
+            try:
+                SubprocessHelper.check_output_with_isolated_pty([
+                    SystemInfo.docker_path(), "rmi",
+                    image])
+                print_msg("removed image " + str(image), color="blue")
+            except subprocess.CalledProcessError:
+                pass
         print_msg("cleaning up dangling volumes...")
         dangling_vols = SubprocessHelper.check_output_with_isolated_pty([
             SystemInfo.docker_path(),
