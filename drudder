@@ -249,9 +249,15 @@ def repair_terminal():
         the terminal alone, this will reset it to a usable state without
         the need to actually do a "reset" command that wipes the scrollback.
     """
-    os.system("stty onlcr")
-    os.system("stty echo")
-    os.system("stty opost")
+    subprocess.call("stty onlcr",
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL)
+    subprocess.call("stty echo",
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL)
+    subprocess.call("stty opost",
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL)
 
 class SubprocessHelper(object):
     @staticmethod
@@ -485,19 +491,24 @@ class GlobalConfig(object):
                     str(e), flush=True, file=sys.stderr)
                 sys.exit(1)
 
-    def get(self, value_path, default=None, _base_obj=None):
+    def get(self, value_path, default=None, _base_obj=None,
+            value_type="list"):
         """ Retrieve the value at the given path key1.subkey2.value
             in the config dictionary (as described by the YAML).
 
             Returns the default instead if the value is not present.
         """
 
+        if default == None and value_type == list:
+            default = []
         parts = value_path.split(".")
-        if base_obj == None:
-            base_obj = self.data
+
+        # Set base object to config root if none specified:
+        if _base_obj == None:
+            _base_obj = self.data
 
         # Get value at first path element:
-        result = base_obj.get(parts[0])
+        result = _base_obj.get(parts[0])
         if result == None:
             return default
 
@@ -505,8 +516,11 @@ class GlobalConfig(object):
         if len(parts) > 1:
             if not isinstance(result, dict):
                 return default
-            return self.get(parts[1:], default=default, _base_obj=result)
+            return self.get(parts[1:], default=default, _base_obj=result,
+                value_type=value_type)
 
+        if not type(result) == value_type:
+            return default
         return result
 gc = GlobalConfig()
 
@@ -2514,9 +2528,17 @@ class ServiceGroup(object):
                     os.path.normpath(os.path.join(d, f))))
 
         # Schedule some common places for scanning:
-        scan_dir(os.getcwd())
-        scan_dir("/usr/share/docker-services")
-        scan_dir("/srv")
+        base_folders = [os.getcwd(), "/usr/share/docker-services", "/srv"]
+        base_folders = [os.path.normpath(
+            os.path.abspath(f).replace("//", "/")) for f in base_folders]
+        user_folders = gc.get("service-locations", value_type=list)
+        user_folders = [os.path.normpath(
+            os.path.abspath(f).replace("//", "/")) for f in user_folders]
+        user_folders = [f for f in user_folders if not f in base_folders]
+        for f in base_folders:
+            scan_dir(f)
+        for f in user_folders:
+            scan_dir(f)
         return services
 
     def _fix_container_id(self, container_id):
