@@ -249,13 +249,13 @@ def repair_terminal():
         the terminal alone, this will reset it to a usable state without
         the need to actually do a "reset" command that wipes the scrollback.
     """
-    subprocess.call("stty onlcr",
+    subprocess.call(["stty", "onlcr"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL)
-    subprocess.call("stty echo",
+    subprocess.call(["stty", "echo"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL)
-    subprocess.call("stty opost",
+    subprocess.call(["stty", "opost"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL)
 
