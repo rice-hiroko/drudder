@@ -1748,11 +1748,15 @@ def print_msg(text, group=None,
         docker_services_part = color_code() + "drudder"
 
     initial_length = len("[drudder")
-    if service != None:
-        initial_length = len("[" + service)
-        if container != None:
-            initial_length += len("/" + container)
+    if group != None:
+        initial_length = len("[" + group)
+        if service != None:
+            initial_length += len("/" + service)
+            if container != None:
+                initial_length += len("/" + container)
     initial_length += len("] ")
+    later_length = int(max(initial_length / 2,
+        min(10, initial_length)))
 
     text_color = ""
     if ENABLE_COLORS:
@@ -1778,13 +1782,13 @@ def print_msg(text, group=None,
         if first_line:
             print_text += textwrap.fill(line, width=70,
                 initial_indent=(" " * initial_length),
-                subsequent_indent=(" " * initial_length))[
+                subsequent_indent=(" " * later_length))[
                 initial_length:]
             first_line = False
         else:
             print_text += "\n" + textwrap.fill(line, width=70,
-                initial_indent=(" " * initial_length),
-                subsequent_indent=(" " * initial_length))
+                initial_indent=(" " * later_length),
+                subsequent_indent=(" " * later_length))
     if ENABLE_COLORS:
         print_text += "\033[0m"
     repair_terminal()
