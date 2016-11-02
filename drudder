@@ -632,10 +632,10 @@ class CommandLineArgumentParser(object):
             "clean": clean up all stopped containers. THIS IS NOT REVERSIBLE. The
                      docker images of course won't be touched.
 
-            "dump-container-info" : dump all sorts of detailed container info as YAML.
-                                    Mainly useful if you want to process the combined
-                                    data computed by drudder with another tool
-                                    of yours.
+            "dump-service-info" : dump all sorts of detailed service info as YAML.
+                                  Mainly useful if you want to process the combined
+                                  data computed by drudder with another tool
+                                  of yours.
             ''')
 
             )
