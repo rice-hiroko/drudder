@@ -1802,9 +1802,10 @@ class DataVolumeMount(object):
         places the volume is mounted on the host's disk.
     """
     def __init__(self, host_path=None,
-            mount_owning_service=None):
+            mount_owning_service=None, container_mount_path=None):
         self.host_path = host_path
         self.service = mount_owning_service
+        self.container_mount_path = container_mount_path
 
     def __repr__(self):
         if self.host_path != None:
@@ -1904,8 +1905,13 @@ class DataVolume(object):
         """
         if self.known_host_mount != None:
             if self.owning_service != None:
-                return [ DataVolumeMount(host_path=self.known_host_mount,
-                    mount_owning_service=self.owning_service) ]
+                if self.container_fs_path != None:
+                    return [ DataVolumeMount(host_path=self.known_host_mount,
+                        mount_owning_service=self.owning_service,
+                        container_mount_path=self.container_fs_path) ]
+                else:
+                    return [ DataVolumeMount(host_path=self.known_host_mount,
+                        mount_owning_service=self.owning_service) ]
             else:
                 return [ DataVolumeMount(host_path=self.known_host_mount) ]
         elif self.owning_container != None:
@@ -4180,56 +4186,58 @@ class ContainerLinkDependencyResolution(object):
                 print(str(service))
         print("End of Graph.")
 
-class ContainerStatusInfo(object):
+class ServiceDetailInfo(object):
     """ A class to compute a dictionary of all sorts of extra information for
         a container. Used by the "info" command.
     """
-    def __init__(self, container):
-        self.container = container
+    def __init__(self, service):
+        self.service = service
 
     def get(self, ordered=False):
         dict_class = dict
         if ordered:
             dict_class = OrderedDict
         info = dict_class()
-        info["Canonical docker container name"] = \
-            self.container.default_container_id 
-        info["Container id"] = self.container.container_id
-        info["Owning service"] = OrderedDict()
-        info["Owning service"]["Name"] = self.container.service.name
-        info["Owning service"]["Location"] = \
-            self.container.service.service_path
-        info["Running"] = self.container.running
+        info["Default docker container name"] = \
+            self.service.default_container_id
+        info["Container ids"] = [container.container_id for container in \
+            self.service.containers]
+        info["Owning service group"] = OrderedDict()
+        info["Owning service group"]["Name"] = self.service.group.name
+        info["Owning service group"]["Location"] = \
+            self.service.group_dir
+        info["Running"] = True if len([container for container in \
+            self.service.containers if container.running]) > 0 else False
         info["Dependencies"] = OrderedDict()
         resolution = ContainerLinkDependencyResolution(
-            Service.all_containers())
+            Service.all())
         info["Dependencies"]["Pre-Start"] = []
         pre_start = \
-            DoAlongDependencyEdges(resolution, [self.container],
+            DoAlongDependencyEdges(resolution, [self.service],
             along_incoming=False, reverse_yield_order=True)
-        for container in pre_start.unprocessed_containers():
-            if container == self.container:
-                pre_start.mark_success(container)
+        for service in pre_start.unprocessed_services():
+            if service == self.service:
+                pre_start.mark_success(service)
                 continue
             info["Dependencies"]["Pre-Start"].append(
-                container)
-            pre_start.mark_success(container)
+                service)
+            pre_start.mark_success(service)
         info["Dependencies"]["Pre-Stop-Post-Restart"] = []
         pre_stop = \
-            DoAlongDependencyEdges(resolution, [self.container],
+            DoAlongDependencyEdges(resolution, [self.service],
             along_incoming=True, reverse_yield_order=True)
-        for container in pre_stop.unprocessed_containers():
-            if container == self.container:
-                pre_stop.mark_success(container)
+        for service in pre_stop.unprocessed_services():
+            if service == self.service:
+                pre_stop.mark_success(service)
                 continue
             info["Dependencies"]["Pre-Stop-Post-Restart"].append(
-                container)
-            pre_stop.mark_success(container)
+                service)
+            pre_stop.mark_success(service)
 
         # Collect volumes:
-        potentially_lost = self.container.potentially_lost_volumes
+        potentially_lost = self.service.potentially_lost_volumes
         info["Volumes"] = list()
-        for volume in self.container.volumes:
+        for volume in self.service.volumes:
             vol_info = dict_class()
             if volume.id != None:
                 vol_info["Id"] = str(volume.id)
@@ -4248,9 +4256,9 @@ class ContainerStatusInfo(object):
                     mount_info = dict_class() 
                     if mount.host_path != None:
                         mount_info["Host mount path"] = mount.host_path
-                    if mount.mount_container_filesystem_path != None:
+                    if mount.container_mount_path != None:
                         mount_info["Container mount path"] =\
-                            mount.mount_container_filesystem_path
+                            mount.container_mount_path
                     vol_info["Mounts"].append(mount_info)
             info["Volumes"].append(vol_info)
         return info
@@ -4842,7 +4850,7 @@ def main():
             print_info("Info for", str(container), bold=True,
                 no_line_break=True)
             print("-" * (len("Info for: ") + len(str(container))))
-            info = ContainerStatusInfo(container).get()
+            info = ServiceDetailInfo(container).get()
             if info["Running"]:
                 print_info("Running", "yes", color="green")
             else:
@@ -4894,46 +4902,22 @@ def main():
                         "         Make sure to specify them in your " +\
                             "docker-compose.yml!\033[0m")
         sys.exit(0)
-    elif args.action == "dump-container-info":
+    elif args.action == "dump-container-info" or\
+            args.action == "dump-service-info":
         if len(args.argument) == 0:
             print("drudder: error: please specify the name " + \
                 "of the service or container to print info for, " +\
                 "or \"all\"", file=sys.stderr)
             sys.exit(1)
-        containers = TargetsParser.get_services(" ".join(args.argument),
+        services = TargetsParser.get_services(" ".join(args.argument),
             print_error=True)
-        if containers == None:
+        if services == None:
             sys.exit(1)
-        for container in containers:
-            info = ContainerStatusInfo(container).get(ordered=True)
-            print("# --- Container: " + str(container))
-            print("\"" + str(container) + "\":")
-            def serialize(item, indent=2):
-                t = ""
-                if isinstance(item, dict) or isinstance(item, OrderedDict):
-                    for k in item:
-                        t = t + " " * indent + k + ":"
-                        t2 = serialize(item[k], indent=2)
-                        if t2.find("\n") >= 0:
-                            if t2.endswith("\n"):
-                                t2 = t2[:-1]
-                            t = t + "\n" + \
-                                "\n".join([" " * (indent) + line for line in \
-                                t2.split("\n")]) + "\n"
-                        else:
-                            t = t + " " + t2[2:] + "\n"
-                elif isinstance(item, list):
-                    for value in item:
-                        t2 = serialize(value, indent=(indent))
-                        t2 = t2.lstrip()
-                        if t2.endswith("\n"):
-                            t2 = t2[:-1]
-                        t = t + "- " +\
-                            t2 + "\n"
-                else:
-                    return " " * indent + str(item)
-                return t
-            print(serialize(info))
+        for service in services:
+            info = ServiceDetailInfo(service).get(ordered=True)
+            print("# --- Service: " + str(service))
+            print("\"" + str(service) + "\":")
+            print(yaml.dump(info, default_flow_style=False, encoding=None))
         sys.exit(0)
     elif args.action == "clean":
         ServiceGroup.global_clean_up(args.force != True)
