@@ -673,7 +673,39 @@ if __name__ == "__main__":
         if len(" ".join(sys.argv[1:]).strip()) == 0:
             sys.exit(1)
         sys.exit(0)
+
+class PyamlInstallInfo(object):
+    @staticmethod
+    def test_for_pyaml():
+        try:
+            import pyaml
+            return True
+        except ImportError:
+            path = PyamlInstallInfo.custom_pyaml_install_path()
+            if path != None:
+                return True
+        return False
+
+    @staticmethod
+    def custom_pyaml_install_path_parent():
+        if platform.system().lower() == "windows":
+            return os.path.join(os.environ['WINDIR'], "drudder-extra-pyaml")
+        else:
+            return os.path.join("/var", "lib", "drudder-extra-pyaml")
+
+    @staticmethod
+    def custom_pyaml_install_path():
+        parent_folder = PyamlInstallInfo.custom_pyaml_install_path_parent()
+        if not os.path.exists(parent_folder):
+            return None
+        for fname in os.listdir(parent_folder):
+            if fname.startswith("pyaml-"):
+                full_path = os.path.join(parent_folder, fname)
+                if os.path.isdir(full_path):
+                    return full_path
+        return None
  
+
 class YAMLInstallInfo(object):
     @staticmethod
     def test_for_yaml():
@@ -849,6 +881,8 @@ class Installer(object):
         missing = []
         if not YAMLInstallInfo.test_for_yaml():
             missing.append("PyYAML")
+        if not PyamlInstallInfo.test_for_pyaml():
+            missing.append("pyaml")
         if not SystemInfo.docker_path(fail_if_not_found=False):
             missing.append("docker")
         if not SystemInfo.docker_machine_path(fail_if_not_found=False):
@@ -876,6 +910,8 @@ class Installer(object):
                 for component in missing:
                     if component == "PyYAML":
                         Installer.install_yaml()
+                    elif component == "pyaml":
+                        Installer.install_pyaml()
                     elif component == "docker-machine":
                         Installer.install_docker_machine()
                     elif component == "docker-compose":
@@ -896,10 +932,22 @@ class Installer(object):
         if YAMLInstallInfo.test_for_yaml():
             # YAML is available, nothing to do.
             return
+        Installer.install_from_pypi("PyYAML",
+            YAMLInstallInfo.custom_yaml_install_path_parent())
 
+    @staticmethod
+    def install_pyaml():
+        if PyamlInstallInfo.test_for_pyaml():
+            # YAML is available, nothing to do.
+            return
+        Installer.install_from_pypi("pyaml",
+            PyamlInstallInfo.custom_pyaml_install_path_parent())
+
+    @staticmethod
+    def install_from_pypi(pypi_url_name, parent_location):
         # Obtain PyPI page for download link:
         import urllib.request
-        pyyaml_url = 'https://pypi.python.org/pypi/PyYAML'
+        pyyaml_url = 'https://pypi.python.org/pypi/' + pypi_url_name
         try:
             with urllib.request.urlopen(
                     pyyaml_url) as response:
@@ -957,41 +1005,43 @@ class Installer(object):
                 if url != None and title.strip().lower().find("source") >= 0:
                     return url.partition("#")[0]
 
-        # PyYAML source download link:
+        # Get source download link:
         yaml_source_link = extract_source_link()
         if yaml_source_link == None:
-            print("drudder: error: failed to obtain PyYAML download link. " +\
-                "Please check your internet connection, and if this " +\
-                "problem persists, file a bug at " +\
+            print("drudder: error: failed to obtain " +
+                pypi_url_name + " download link. " +
+                "Please check your internet connection, and if this " +
+                "problem persists, file a bug at " +
                 BUG_URL, file=sys.stderr)
             sys.exit(1)
         if not yaml_source_link.startswith("https://"):
-            print("drudder: error: PyYAML download link is bogus, " +\
+            print("drudder: error: " +
+                pypi_url_name + " download link is bogus, " +
                 "unexpected protocol: " + str(yaml_source_link))
-            print("Please file a bug at " +\
+            print("Please file a bug at " +
                 BUG_URL, file=sys.stderr)
             sys.exit(1)
 
         # Make sure the install base path exists:
-        parent_path = YAMLInstallInfo.custom_yaml_install_path_parent()
+        parent_path = parent_location
         if not os.path.exists(parent_path):
             try:
                 os.mkdir(parent_path) 
             except OSError:
-                print("drudder: error: failed to create path: " +\
+                print("drudder: error: failed to create path: " +
                     str(parent_path), file=sys.stderr)
-                print("Please re-run this with sudo / administrator " +\
+                print("Please re-run this with sudo / administrator " +
                     "privileges.", file=sys.stderr)
                 sys.exit(1)
 
         # Get source:
         try:
-            print("Downloading PyYAML... (this might take " +\
+            print("Downloading " + pypi_url_name + "... (this might take " +
                 "a while)")
             local_filename, headers = urllib.request.urlretrieve(
                 yaml_source_link)
             source_extract_path = os.path.join(
-                parent_path, "PyYaml.tar.gz")
+                parent_path, "pypi_package.tar.gz")
             shutil.copy(local_filename, source_extract_path)
             os.remove(local_filename)
         except Exception as e:
@@ -1001,7 +1051,7 @@ class Installer(object):
             print("Please check your internet connectivity.", file=sys.stderr)
             sys.exit(1)
 
-        # Extract PyYAML:
+        # Extract package:
         import tarfile
         tar_file = tarfile.open(source_extract_path)
         tar_file.extractall(parent_path)
@@ -1628,7 +1678,25 @@ except ImportError as e1:
         except ImportError as e2:
             pass
 if not yaml_available and __name__ == "__main__":
-    print("drudder: error: PyYAML import unexpectedly failed. " +\
+    print("drudder: error: PyYAML import unexpectedly failed. " +
+        "Please file a bug at " + str(BUG_URL))
+    sys.exit(1)
+pyaml_available = False
+try:
+    import pyaml
+    pyaml_available = True
+except ImportError as e1:
+    pyaml_available = False
+    pyaml_lib_path = PyamlInstallInfo.custom_pyaml_install_path()
+    if pyaml_lib_path != None and os.path.exists(pyaml_lib_path):
+        sys.path.insert(0, pyaml_lib_path + "/")
+        try:
+            import pyaml
+            pyaml_available = True
+        except ImportError as e2:
+            pass
+if not pyaml_available and __name__ == "__main__":
+    print("drudder: error: pyaml import unexpectedly failed. " +
         "Please file a bug at " + str(BUG_URL))
     sys.exit(1)
 
@@ -4220,7 +4288,7 @@ class ServiceDetailInfo(object):
                 pre_start.mark_success(service)
                 continue
             info["Dependencies"]["Pre-Start"].append(
-                service)
+                str(service))
             pre_start.mark_success(service)
         info["Dependencies"]["Pre-Stop-Post-Restart"] = []
         pre_stop = \
@@ -4231,7 +4299,7 @@ class ServiceDetailInfo(object):
                 pre_stop.mark_success(service)
                 continue
             info["Dependencies"]["Pre-Stop-Post-Restart"].append(
-                service)
+                str(service))
             pre_stop.mark_success(service)
 
         # Collect volumes:
@@ -4917,7 +4985,7 @@ def main():
             info = ServiceDetailInfo(service).get(ordered=True)
             print("# --- Service: " + str(service))
             print("\"" + str(service) + "\":")
-            print(yaml.dump(info, default_flow_style=False, encoding=None))
+            print(pyaml.dump(info))
         sys.exit(0)
     elif args.action == "clean":
         ServiceGroup.global_clean_up(args.force != True)
