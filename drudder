@@ -4932,8 +4932,8 @@ def main():
                 print_info("Running", "yes", color="green")
             else:
                 print_info("Running", "no", color="red")
-            print_info("Canonical docker container name",
-                info["Canonical docker container name"])
+            print_info("Default docker container name",
+                info["Default docker container name"])
             print_info("Configuration file",
                 os.path.join(container.service.service_path,
                 "docker-compose.yml"))
