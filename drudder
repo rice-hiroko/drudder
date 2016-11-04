@@ -2558,10 +2558,11 @@ class ServiceGroup(object):
 
     @staticmethod
     def find_by_name(name):
+        results = []
         for service_group in ServiceGroup.all():
             if service_group.name == name:
-                return service_group
-        return None
+                results.append(service_group)
+        return results
 
     @staticmethod
     def all_services():
@@ -3654,27 +3655,34 @@ class TargetsParser(object):
 
             # Examine the current group[/service] entry:
             group_name = target.partition("/")[0]
-            group = ServiceGroup.find_by_name(group_name)
-            if group == None:
+            groups = ServiceGroup.find_by_name(group_name)
+            if len(groups) == 0:
                 if print_error:
-                    print("drudder: error: " + \
-                        "no such service group found: " +\
+                    print("drudder: error: " +
+                        "no such service group found: " +
                         str(group_name),
                         file=sys.stderr, flush=True)
                 return None
 
             # See if a specific service is specified, or just all of them:
             service_name = target.partition("/")[2]
+            services = []
             if len(service_name) == 0: # all services:
-                services = group.services
-                if len(services) == 0:
+                found_services = False
+                for g in groups:
+                    if len(g.services) > 0:
+                        found_services = True
+                if not found_services:
                     print_msg("warning: specified group has no " +\
                         "services", color="yellow", group=group.name)
+                for g in groups:
+                    services += g.services
             else: # a specific service. find it by name:
                 services = []
-                for service in group.services:
-                    if service.name == service_name:
-                        services.append(service)
+                for group in groups:
+                    for service in group.services:
+                        if service.name == service_name:
+                            services.append(service)
                 # Check if the container was found by name or not:
                 if len(services) == 0:
                     if print_error:
@@ -3722,8 +3730,8 @@ class TargetsParser(object):
                         except KeyError:
                             pass
                 return list(result)
-            group = ServiceGroup.find_by_name(target.partition("/")[0])
-            if group == None:
+            groups = ServiceGroup.find_by_name(target.partition("/")[0])
+            if len(groups) == 0:
                 if print_error:
                     print("drudder: error: " + \
                         "no such group found: " + str(
@@ -3731,10 +3739,11 @@ class TargetsParser(object):
                         file=sys.stderr)
                 return None
             if not negated:
-                result.add(group)
+                result += groups
             else:
                 try:
-                    result.remove(group)
+                    for group in groups:
+                        result.remove(group)
                 except KeyError:
                     pass
         return list(result)
@@ -4985,7 +4994,7 @@ def main():
             info = ServiceDetailInfo(service).get(ordered=True)
             print("# --- Service: " + str(service))
             print("\"" + str(service) + "\":")
-            print(pyaml.dump(info))
+            print("  " + "\n  ".join(pyaml.dump(info).split("\n")))
         sys.exit(0)
     elif args.action == "clean":
         ServiceGroup.global_clean_up(args.force != True)
