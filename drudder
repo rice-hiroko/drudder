@@ -4877,9 +4877,9 @@ def main():
                 "of the service or container to print info for, " +\
                 "or \"all\"", file=sys.stderr)
             sys.exit(1)
-        containers = TargetsParser.get_services(" ".join(args.argument),
+        services = TargetsParser.get_services(" ".join(args.argument),
             print_error=True)
-        if containers == None:
+        if services == None or len(services) == 0:
             sys.exit(1)
         def print_info(key, value=None, color=None, bold=False,
                 no_line_break=False):
@@ -4919,15 +4919,16 @@ def main():
                 t += "\033[0m"
             print(t)
         first = True
-        for container in containers:
+        for service in services:
             if first:
                 first = False
             else:
                 print("")
-            print_info("Info for", str(container), bold=True,
+            print_info("Info for", str(service), bold=True,
                 no_line_break=True)
-            print("-" * (len("Info for: ") + len(str(container))))
-            info = ServiceDetailInfo(container).get()
+            print("-" * (len("Info for: ") + len(str(
+                service))))
+            info = ServiceDetailInfo(service).get()
             if info["Running"]:
                 print_info("Running", "yes", color="green")
             else:
@@ -4935,18 +4936,19 @@ def main():
             print_info("Default docker container name",
                 info["Default docker container name"])
             print_info("Configuration file",
-                os.path.join(container.service.service_path,
+                os.path.join(service.group_dir,
                 "docker-compose.yml"))
-            snapshots = Snapshots(container)
+            snapshots = Snapshots(service)
             if not snapshots.subvolume_readiness_check():
                 print_info("Live data snapshot support",
                     "no",
                     color="red")
-                print("  Hint: try \"drudder snapshot " +\
-                    str(container.service.name) + "\" for details")
+                print("  Hint: try \"drudder snapshot " +
+                    str(service.group.name) + "/" +
+                    str(service.name) + "\" for details")
             else:
                 print_info("Live data snapshot support", "ok", color="green")
-            print("This container depends on "+\
+            print("This service depends on "+\
                 "(ensured to run if this one starts):")
             l = info["Dependencies"]["Pre-Start"]
             if len(l) == 0:
@@ -4954,7 +4956,7 @@ def main():
             else:
                 for item in l:
                     print(" - " + str(item))
-            print("Other containers depending on this " +\
+            print("Other services depending on this " +\
                 "(restarted along with this one):")
             l = info["Dependencies"]["Pre-Stop-Post-Restart"]
             if len(l) == 0:
@@ -4970,7 +4972,7 @@ def main():
                         have_potentially_lost_volumes = True
                         break
             if have_potentially_lost_volumes:
-                potentially_lost = container.potentially_lost_volumes
+                potentially_lost = service.potentially_lost_volumes
                 if len(potentially_lost) > 0:
                     print("\033[33m\033[1mWarning: some volumes might be " +\
                         "lost on container recreation:\n         "+\
