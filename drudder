@@ -208,7 +208,7 @@ freely, subject to the following restrictions:
 """ Copyright (C) Jonas Thiem et al., 2015-2016
 """
 
-TOOL_VERSION="0.1"
+TOOL_VERSION="0.2.0"
 BUG_URL="https://github.com/JonasT/drudder"
 
 import argparse
