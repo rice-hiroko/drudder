@@ -2364,7 +2364,8 @@ class Service(object):
     @property
     def default_container_id(self):
         fpath = os.path.normpath(os.path.abspath(self.group_dir))
-        return (os.path.basename(fpath).replace("-", "").replace(".", "")
+        return (os.path.basename(fpath).replace("-", "").replace(".", "").\
+            lower()
             + "_" + str(self.name) + "_1")
 
     @property
