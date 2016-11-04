@@ -669,6 +669,10 @@ if __name__ == "__main__":
             sys.argv[1] == "--version" or sys.argv[1] == "-v" or \
             sys.argv[1] == "-h" or sys.argv[1] == "--help":
         parser = CommandLineArgumentParser.construct_parser()
+        if len(sys.argv) > 1 and (sys.argv[1] == "--version" or
+                sys.argv[1] == "-v"):
+            print("drudder version " + str(TOOL_VERSION))
+            sys.exit(0) 
         parser.print_help()
         if len(" ".join(sys.argv[1:]).strip()) == 0:
             sys.exit(1)
