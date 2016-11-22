@@ -2479,7 +2479,7 @@ class Service(object):
 
         # Extract volume lines:
         yml = DockerComposeYml(self.group_dir, self.name)
-        if "volumes" in yml.data:
+        if "volumes" in yml.data and type(yml.data["volumes"]) == list:
             for line in yml.data["volumes"]:
                 parse_volume_line(line.split(":"))
         return volumes
