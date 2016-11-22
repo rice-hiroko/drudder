@@ -1784,7 +1784,7 @@ def print_msg(text, group=None,
     elif color == "green":
         info_msg = "SUCCESS"
 
-    text = clear_text(text, allow_line_breaks=False)
+    text = clear_text(text, allow_line_breaks=True)
 
     ENABLE_COLORS=True
 
