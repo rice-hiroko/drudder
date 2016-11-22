@@ -2479,6 +2479,9 @@ class Service(object):
 
         # Extract volume lines:
         yml = DockerComposeYml(self.group_dir, self.name)
+        if yml == None or yml.data == None:
+            raise ValueError("failed to parse docker.compose.yml of group " +
+                self.group_dir)
         if "volumes" in yml.data and type(yml.data["volumes"]) == list:
             for line in yml.data["volumes"]:
                 parse_volume_line(line.split(":"))
