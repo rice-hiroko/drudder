@@ -2786,9 +2786,8 @@ class ServiceGroup(object):
         external_links = []
         yml = DockerComposeYml(self.group_dir, service_name)
         if yml.data == None:
-            raise ValueError("no such service found: " +\
-                str(service_name) + " (external reference in " +
-                os.path.join(self.group_dir, "docker.compose.yml") + ")")
+            raise ValueError("failed to parse docker-compose.yml of group " +\
+                self.group_dir)
         if not "external_links" in yml.data:
             return []
         return [entry.partition(":")[0] for entry in \
