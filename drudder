@@ -3252,8 +3252,8 @@ class Snapshots(object):
                         return False
             except Exception as e:
                 print_msg("there was a problem. btrfs snapshotting won't " +\
-                    "work as intended. Error details: " + str(e) + "\n" +
-                    "\n".join(traceback.format_tb(e.__traceback__)),
+                    "work as intended. Error details: " + str(e) + "\n\n" +
+                    "\n\n".join(traceback.format_tb(e.__traceback__)),
                     service=service.name,
                     group=self.group.name,
                     color="red")
