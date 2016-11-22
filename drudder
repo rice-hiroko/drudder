@@ -1744,7 +1744,7 @@ class DockerComposeYml(object):
                         if isinstance(self.parsed_obj["services"]\
                                 [service], dict):
                             self._desired_data = self.parsed_obj\
-                                ["services"][container]
+                                ["services"][service]
             else:
                 if isinstance(self.parsed_obj, dict) and \
                         service in self.parsed_obj:
