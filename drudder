@@ -2081,7 +2081,7 @@ class ServiceContainer(object):
             if host_mounted and volume.specified_in_yml:
                 # Host mount specified in .yml -> we should be fine
                 continue
-            potentially_lost_volumes.append(volume)
+            potentially_lost_volumes.add(volume)
         return potentially_lost_volumes
 
     def start(self, force_container_recreation=False, print_mutex=None):
