@@ -2799,6 +2799,7 @@ class ServiceGroup(object):
             then irrevocably delete all containers that aren't running.
             It will also delete all dangling volumes.
         """
+        had_error = False
         if ask:
             answer = input("\033[1m!! DANGER !!\033[0m\n"+\
                 "This will irrevocably delete all "+\
@@ -2850,6 +2851,7 @@ class ServiceGroup(object):
                 except subprocess.CalledProcessError:
                     print_msg("warning: failed to delete container " +
                         parts[0], color="yellow")
+                    had_error = True
         print_msg("cleaning up unneeded images...")
         images = SubprocessHelper.check_output_with_isolated_pty([
             SystemInfo.docker_path(), "images", "-aq"])
@@ -2875,9 +2877,24 @@ class ServiceGroup(object):
             vol = vol.strip()
             if len(vol) == 0:
                 continue
-            SubprocessHelper.check_output_with_isolated_pty([
-                SystemInfo.docker_path(),
-                "volume", "rm", vol])
+            fail = False
+            try:
+                output = SubprocessHelper.\
+                    check_output_with_isolated_pty([
+                    SystemInfo.docker_path(),
+                    "volume", "rm", vol])
+            except subprocess.CalledProcessError as e:
+                output = e.output
+                fail = True
+            try:
+                output = output.decode('utf-8', 'replace')
+            except AttributeError:
+                pass
+            if fail:
+                print_msg("error when trying to remove volume '" +
+                    str(vol) + "' with following error output:\n" +
+                    output, color="red")
+                had_error = True
         print_msg("cleaning up container logs...")
         for f in os.listdir("/var/lib/docker/"):
             for fname in os.path.join("/var/lib/docker/", f):
@@ -2885,6 +2902,9 @@ class ServiceGroup(object):
                     subprocess.check_output([
                         "truncate", "-s", "0",
                         os.path.join("/var/lib/docker/", f, fname)])
+        if had_error:
+            return False
+        return True
 
     @property
     def services(self):
@@ -5008,7 +5028,9 @@ def main():
             print("  " + "\n  ".join(pyaml.dump(info).split("\n")))
         sys.exit(0)
     elif args.action == "clean":
-        ServiceGroup.global_clean_up(args.force != True)
+        if not ServiceGroup.global_clean_up(args.force != True):
+            sys.exit(1)
+        sys.exit(0)
     else:
         unknown_action()
 
