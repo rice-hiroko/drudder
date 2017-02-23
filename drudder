@@ -1816,7 +1816,8 @@ def print_msg(text, group=None,
                 service_part += "/" + container
 
     docker_services_part = ""
-    if service == None or len(service) == 0:
+    if service == None or len(service) == 0 or \
+            group == None and len(group) == 0:
         docker_services_part = color_code() + "drudder"
 
     initial_length = len("[drudder")
@@ -2698,14 +2699,21 @@ class ServiceGroup(object):
                     "installed with " +\
                     "a version incompatible to docker.", color="red")
                 sys.exit(1)
+            invalid_syntax = False
             if output.find("ERROR") > 0 and output.find("ERROR") <= 10 and\
                     output.find("In file") > output.find("ERROR") and \
                     output.find("In file ") <= 20 and \
                     output.find("docker-compose.yml") >= 0:
+                invalid_syntax = True
+            if output.find("The Compose file is invalid") >= 0:
+                invalid_syntax = True
+            if invalid_syntax:
                 print_msg("warning: it appears the docker-compose file " +\
                     "has a syntax error: " + str(output), color="yellow",
-                    service=self.name)
+                    group=self.name)
                 return []
+            print_msg("error: unexpected failure running docker-compose " +
+                "ps in folder: " + self.group_dir, color="red")
             raise e
         output = output.\
             replace("\r", "\n").replace("\n\n", "\n").split("\n")
@@ -4510,14 +4518,31 @@ def main():
             state = ""
             running_services = []
             stopped_services = []
-            for service in group.services:
-                containers = [container for container in service.containers]
-                running_containers = [container for container in containers if \
-                    container.running]
-                if len(running_containers) > 0:
-                    running_services.append(service)
-                else:
-                    stopped_services.append(service)
+            try:
+                for service in group.services:
+                    containers = [container for container in
+                        service.containers]
+                    running_containers = [container for container in
+                        containers if
+                        container.running]
+                    if len(running_containers) > 0:
+                        running_services.append(service)
+                    else:
+                        stopped_services.append(service)
+            except subprocess.CalledProcessError as e:
+                o = e.output
+                try:
+                    o = o.decode("utf-8", "replace")
+                except AttributeError:
+                    pass
+                o = str(o.replace("\r\n", "\n").replace("\r", "\n").split(
+                    "\n"))
+                print("\033[0m  - \033[1mgroup " +
+                    group.name + "\033[0m (" + \
+                    group.group_dir + "): " +
+                    "\033[1;31mUNEXPECTED ERROR running " +
+                    "docker-compose ps: " + str(o) + "\033[0m")
+                continue
             if len(running_services) + len(stopped_services) == 0:
                 state = "\033[1;33mgroup has no services" +\
                     "\033[0m"
