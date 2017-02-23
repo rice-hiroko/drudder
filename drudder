@@ -2673,7 +2673,7 @@ class ServiceGroup(object):
                         container_id):
                 if matched_id != None:
                     return None  # not unique.
-                matched_id = container.container_id
+                matched_id = service.default_container_id
         return matched_id
 
     def _get_running_service_container_ids(self):
