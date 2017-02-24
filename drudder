@@ -4636,7 +4636,7 @@ def main():
                     "\033[0m"
             elif len(stopped_services) == 0:
                 state = "\033[1;32mrunning (" +\
-                    " ".join([service.name for service in \
+                    ", ".join([service.name for service in \
                         running_services]) + ")\033[0m"
             elif len(running_services) > 0:
                 state = "\033[1;33mpartial (" +\
