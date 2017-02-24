@@ -618,6 +618,10 @@ class CommandLineArgumentParser(object):
             "info": show more detailed info for the given service (or "all for
                     all).
 
+            "rebuild": rebuild this container or pull the newest images. Always
+                    rebuilds without any cache to make sure everything is at
+                    the very latest version.
+
             "logs": output the logs of all the docker containers of the service
                     specified as argument (or "all" for all).
 
@@ -2032,6 +2036,7 @@ class ServiceContainer(object):
     """
     def __init__(self, container_id, service_name, group_name, group_dir):
         self.container_id = container_id
+        self.id = self.container_id
         self.service_name = service_name
         self.group_name = group_name
         self.group_dir = group_dir
@@ -2089,7 +2094,7 @@ class ServiceContainer(object):
         if self.running:
             return
 
-        if self.container_id == self.service.default_container_id:
+        if self.container_id in self.service.default_container_ids:
             self.service.start(
                 force_container_recreation=force_container_recreation,
                 print_mutex=print_mutex)
@@ -2367,11 +2372,16 @@ class Service(object):
             os.path.abspath(os.path.realpath(self.group_dir))))
 
     @property
-    def default_container_id(self):
+    def default_container_ids(self):
         fpath = os.path.normpath(os.path.abspath(self.group_dir))
-        return (os.path.basename(fpath).replace("-", "").replace(".", "").\
+        return [
+            (os.path.basename(fpath).replace("-", "").replace(".", "").\
             lower()
-            + "_" + str(self.name) + "_1")
+            + "_" + str(self.name) + "_1"),
+            (os.path.basename(fpath).replace("-", "").replace(".", "").\
+            lower()
+            + "_" + str(self.name))
+            ]
 
     @property
     def running(self):
@@ -2386,16 +2396,23 @@ class Service(object):
         container_ps_list = self.group._get_ps_service_container_ids(
             only_running=False)
         for cid in container_ps_list:
+            assert(isinstance(cid, str))
             if self.group._container_id_belongs_to_service(cid, self): 
                 container_instance_ids.add(cid)
 
         # Add hypothetical default container:
-        container_ids = container_instance_ids.union(set([
-            self.default_container_id]))
+        have_default = False
+        for default_id in self.default_container_ids:
+            if default_id in container_instance_ids:
+                have_default = True
+                break
+        if not have_default:
+            container_instance_ids = container_instance_ids.union(set([
+                self.default_container_ids[0]]))
 
         # Convert to proper ServiceContainer classes:
         result = set()
-        for cid in container_ids:
+        for cid in container_instance_ids:
             container = ServiceContainer(cid,
                 self.name, self.group_name, self.group_dir)
             result.add(container)
@@ -2504,7 +2521,7 @@ class Service(object):
             # See if we can find the target service:
             for service_group in ServiceGroup.all():
                 for service in service_group.services:
-                    if service.default_container_id == link_name:
+                    if link_name in service.default_container_ids:
                         target_found = True
                         dependencies.append(ServiceDependency(
                             service.name,
@@ -2637,10 +2654,14 @@ class ServiceGroup(object):
             in almost all cases it still is). In this function, we try to get
             back the full unshortened name.
         """
-        assert(container_id != None)
+        assert(container_id != None and isinstance(container_id, str))
+        print("Fixing container id: " + container_id)
+
         # Check if a standard container name for a service matches fully:
         for service in self.services:
-            if service.default_container_id == container_id:
+            print("COMPARING AGAINST DEFAULTS: " +
+                str(service.default_container_ids))
+            if container_id in service.default_container_ids:
                 return container_id
 
         # Check if this matches a common name pattern:
@@ -2651,7 +2672,7 @@ class ServiceGroup(object):
                 except (TypeError, ValueError):
                     return False
                 return True
-            default_id = service.default_container_id
+            default_id = service.default_container_ids[0]
             assert(default_id.endswith("_1"))
             id_base = default_id[:-len("1")]
             if container_id.startswith(id_base + "run_"):
@@ -2666,18 +2687,35 @@ class ServiceGroup(object):
         # Check for whether a default container name starts with this name:
         matched_id = None
         for service in self.services:
-            if service.default_container_id.startswith(
+            if service.default_container_ids[0].startswith(
                         container_id) or \
-                    (service.default_container_id[:-len("1")] +\
+                    (service.default_container_ids[0][:-len("1")] +\
                         "_run_").startswith(
                         container_id):
                 if matched_id != None:
                     return None  # not unique.
-                matched_id = service.default_container_id
+                matched_id = service.default_container_ids[0]
         return matched_id
 
     def _get_running_service_container_ids(self):
         return self._get_ps_service_container_ids(only_running=True)
+
+    @staticmethod
+    def _docker_container_id_to_name(cid):
+        output = subprocess.check_output(["docker", "inspect", cid])
+        try:
+            output = output.decode("utf-8", "replace")
+        except AttributeError:
+            pass
+        if len(output.strip()) == 0:
+            return None
+        obj = json.loads(output)
+        if len(obj) == 0:
+            return None
+        name = obj[0]["Name"]
+        if name.startswith("/"):
+            name = name[1:]
+        return name
 
     def _get_ps_service_container_ids(self, only_running=False):
         """ Get all running containers of the given service.
@@ -2688,7 +2726,7 @@ class ServiceGroup(object):
             env = os.environ.copy()
             env["COLUMNS"] = "200"
             output = execution_cache.check_output_with_isolated_pty([
-                SystemInfo.docker_compose_path(), "ps"],
+                SystemInfo.docker_path(), "ps"],
                 cwd=self.group_dir, stderr=subprocess.STDOUT,
                 timeout=10, env=env).\
                 decode("utf-8", "ignore")
@@ -2700,20 +2738,13 @@ class ServiceGroup(object):
                     "a version incompatible to docker.", color="red")
                 sys.exit(1)
             invalid_syntax = False
-            if output.find("ERROR") > 0 and output.find("ERROR") <= 10 and\
-                    output.find("In file") > output.find("ERROR") and \
-                    output.find("In file ") <= 20 and \
-                    output.find("docker-compose.yml") >= 0:
-                invalid_syntax = True
-            if output.find("The Compose file is invalid") >= 0:
-                invalid_syntax = True
             if invalid_syntax:
                 print_msg("warning: it appears the docker-compose file " +\
                     "has a syntax error: " + str(output), color="yellow",
                     group=self.name)
                 return []
-            print_msg("error: unexpected failure running docker-compose " +
-                "ps in folder: " + self.group_dir, color="red")
+            print_msg("error: unexpected failure running docker ps",
+                color="red")
             raise e
         output = output.\
             replace("\r", "\n").replace("\n\n", "\n").split("\n")
@@ -2723,9 +2754,9 @@ class ServiceGroup(object):
             # Skip irrelevant lines:
             if len(output_line.strip()) == 0:
                 continue
-            if output_line.startswith("---------") \
-                    or output_line.startswith(" ") \
-                    or output_line.startswith("\t"):
+            if (output_line.startswith("CONTAINER ID")
+                    or output_line.startswith(" ")
+                    or output_line.startswith("\t")):
                 skipped_past_dashes = True
                 continue
 
@@ -2733,20 +2764,25 @@ class ServiceGroup(object):
             output_line = output_line.strip()
             if len(output_line) > 0 and (output_line.find(" Up") > 0 or \
                     not only_running):
-                space_pos = output_line.find(" ")
-                running_containers.append(output_line[:space_pos])
-        l = [self._fix_container_id(container) \
-            for container in running_containers]
-        return [name for name in l if name is not None]
+                container_id = self._docker_container_id_to_name(
+                    output_line.partition(" ")[0])
+                running_containers.append(container_id)
+
+        return [name for name in running_containers if name is not None]
 
     def _container_id_belongs_to_service(self, cid, service):
+        assert(isinstance(cid, str))
         def is_int(i):
             try:
                 int_i = int(i)
             except (TypeError, ValueError):
                 return False
             return True
-        def_base = service.default_container_id[:-len("1")]
+        def_base = service.default_container_ids[0]
+        if def_base.endswith("_1"):
+            def_base = def_base[:-len("1")]
+        elif not def_base.endswith("_"):
+            def_base += "_"
         if cid.startswith(def_base):
             remains = cid[len(def_base):]
             if remains.startswith("run_"):
@@ -3170,6 +3206,7 @@ ensure_docker_compose = SystemInfo.docker_compose_path()
 class Snapshots(object):
     def __init__(self, service_group):
         self.group = service_group
+        assert(isinstance(self.group, ServiceGroup))
 
     def check_running_snapshot_transaction(self):
         if os.path.exists(os.path.join(
@@ -4313,7 +4350,7 @@ class ServiceDetailInfo(object):
             dict_class = OrderedDict
         info = dict_class()
         info["Default docker container name"] = \
-            self.service.default_container_id
+            self.service.default_container_ids[0]
         info["Container ids"] = [container.container_id for container in \
             self.service.containers]
         info["Owning service group"] = OrderedDict()
@@ -4987,12 +5024,16 @@ def main():
                 print_info("Running", "yes", color="green")
             else:
                 print_info("Running", "no", color="red")
+            print_info("Container ids",
+                info["Container ids"])
+            print_info("DEBUG RUNNING IDS",
+                service.group._get_running_service_container_ids())
             print_info("Default docker container name",
                 info["Default docker container name"])
             print_info("Configuration file",
                 os.path.join(service.group_dir,
                 "docker-compose.yml"))
-            snapshots = Snapshots(service)
+            snapshots = Snapshots(service.group)
             if not snapshots.subvolume_readiness_check():
                 print_info("Live data snapshot support",
                     "no",
