@@ -538,12 +538,15 @@ class GlobalConfig(object):
 gc = GlobalConfig()
 
 class ExecutionCache(object):
-    def __init__(self, duration_ms=600):
+    def __init__(self, duration_ms=10000):
         self.duration = duration_ms * 0.001
         self._cache = dict()
 
     def check_output(self, cmd, **kwargs):
         return self.check_output_with_isolated_pty(cmd, **kwargs)
+
+    def clear(self):
+        self._cache = dict()
 
     def check_output_with_isolated_pty(self, cmd, shell=False, cwd=None,
             stdout=None, stderr=None, timeout=None, env=None,
@@ -2116,9 +2119,11 @@ class ServiceContainer(object):
             "directly is not implemented right now")
 
     def stop(self):
+        global execution_cache
         subprocess.check_call([SystemInfo.docker_path(),
             "stop", self.container_id],
             cwd=self.service.group.group_dir)
+        execution_cache.clear()
 
     @property
     def running(self):
@@ -2299,6 +2304,8 @@ class Service(object):
             container.stop()
 
     def start(self, force_container_recreation=False, print_mutex=None):
+        global execution_cache
+
         if self.running:
             return
 
@@ -2345,6 +2352,7 @@ class Service(object):
             print_mutex.release()
         output = ""
         try:
+            execution_cache.clear()
             output = SubprocessHelper.check_output_with_isolated_pty([
                 SystemInfo.docker_compose_path(),
                 "up", "-d", self.name],
@@ -2741,7 +2749,8 @@ class ServiceGroup(object):
             env["COLUMNS"] = "200"
             output = execution_cache.check_output_with_isolated_pty([
                 SystemInfo.docker_path(), "ps"],
-                cwd=self.group_dir, stderr=subprocess.STDOUT,
+                cwd=os.path.expanduser("~"),
+		stderr=subprocess.STDOUT,
                 timeout=10, env=env).\
                 decode("utf-8", "ignore")
         except subprocess.CalledProcessError as e:
