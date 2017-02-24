@@ -2409,6 +2409,22 @@ class Service(object):
         return len(self.group._get_running_service_container_names(
             self)) > 0
 
+    def get_custom_container_name_from_yml(self):
+        # Get YML:
+        yml = DockerComposeYml(self.group_dir, self.name)
+        if yml == None or yml.data == None or \
+                not isinstance(yml.data, dict):
+            print_msg(
+                "failed to parse docker.compose.yml",
+                group=self.group.name, color="yellow")
+            return
+
+        # Check for container_name:
+        if "container_name" in yml.data and \
+                isinstance(yml.data["container_name"], str):
+            return yml.data["container_name"]
+        return None
+
     @property
     def containers(self):
         container_instance_ids = set()
@@ -2423,13 +2439,24 @@ class Service(object):
 
         # Add hypothetical default container:
         have_default = False
-        for default_id in self.default_container_ids:
-            if default_id in container_instance_ids:
+        custom_name = self.get_custom_container_name_from_yml()
+        if custom_name == None:
+            # Check against regular default container names:
+            for default_id in self.default_container_ids:
+                if default_id in container_instance_ids:
+                    have_default = True
+                    break
+        else:
+            # Check against custom user-specified containre name:
+            if custom_name in container_instance_ids:
                 have_default = True
-                break
         if not have_default:
-            container_instance_ids = container_instance_ids.union(set([
-                self.default_container_ids[0]]))
+            if custom_name == None:
+                container_instance_ids =\
+                    container_instance_ids.union(set([
+                        self.default_container_ids[0]]))
+            else:
+                container_instance_ids.add(custom_name)
 
         # Convert to proper ServiceContainer classes:
         result = set()
@@ -2793,6 +2820,9 @@ class ServiceGroup(object):
 
     def _container_id_belongs_to_service(self, cid, service):
         assert(isinstance(cid, str))
+        custom_name = service.get_custom_container_name_from_yml()
+        if custom_name != None and custom_name == cid:
+            return True
         def is_int(i):
             try:
                 int_i = int(i)
@@ -5047,11 +5077,6 @@ def main():
                 print_info("Running", "no", color="red")
             print_info("Container ids",
                 info["Container ids"])
-            print_info("DEBUG RUNNING IDS",
-                service.group._get_ps_service_container_ids(
-                    translate_to_names=False))
-            print_info("DEBUG RUNNING NAMES",
-                service.group._get_running_service_container_ids())
             print_info("Default docker container name",
                 info["Default docker container name"])
             print_info("Configuration file",
