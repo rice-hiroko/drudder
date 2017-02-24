@@ -332,6 +332,10 @@ class SubprocessHelper(object):
                 self.fileobj = fileobj
                 self.writer_func = writer
                 self.copy_to = copy_to
+                self.done = threading.Event()
+
+            def wait(self, timeout):
+                return self.done.wait(timeout)
 
             def run(self):
                 if self.fileobj == None:
@@ -341,7 +345,11 @@ class SubprocessHelper(object):
                         try:
                             c = self.fileobj.read(1)
                         except ValueError:
+                            self.done.set()
                             raise OSError("file object invalid")
+                        if len(c) == 0:
+                            self.done.set()
+                            break
 
                         # Make sure it is bytes:
                         try:
@@ -361,6 +369,7 @@ class SubprocessHelper(object):
                         if self.writer_func != None:
                             self.writer_func(c)
                     except OSError:
+                        self.done.set()
                         break
 
         # Launch output readers as required and collect data:
@@ -411,6 +420,10 @@ class SubprocessHelper(object):
 
         # Wait for process to end:
         process.wait()
+        if stdout_reader != None:
+            stdout_reader.wait(5.0)
+        if stderr_reader != None:
+            stderr_reader.wait(5.0)
         try:
             process.stdout.close()
         except Exception:
@@ -2717,7 +2730,8 @@ class ServiceGroup(object):
             name = name[1:]
         return name
 
-    def _get_ps_service_container_ids(self, only_running=False):
+    def _get_ps_service_container_ids(self, only_running=False,
+            translate_to_names=True):
         """ Get all running containers of the given service.
             Returns a list of container ids.
         """
@@ -2749,23 +2763,21 @@ class ServiceGroup(object):
         output = output.\
             replace("\r", "\n").replace("\n\n", "\n").split("\n")
 
-        skipped_past_dashes = False
         for output_line in output:
             # Skip irrelevant lines:
             if len(output_line.strip()) == 0:
                 continue
-            if (output_line.startswith("CONTAINER ID")
-                    or output_line.startswith(" ")
-                    or output_line.startswith("\t")):
-                skipped_past_dashes = True
+            if output_line.startswith("CONTAINER ID"):
                 continue
 
             # Extract containers:
             output_line = output_line.strip()
             if len(output_line) > 0 and (output_line.find(" Up") > 0 or \
                     not only_running):
-                container_id = self._docker_container_id_to_name(
-                    output_line.partition(" ")[0])
+                container_id = output_line.partition(" ")[0]
+                if translate_to_names:
+                    container_id = self._docker_container_id_to_name(
+                        container_id)
                 running_containers.append(container_id)
 
         return [name for name in running_containers if name is not None]
@@ -5027,6 +5039,9 @@ def main():
             print_info("Container ids",
                 info["Container ids"])
             print_info("DEBUG RUNNING IDS",
+                service.group._get_ps_service_container_ids(
+                    translate_to_names=False))
+            print_info("DEBUG RUNNING NAMES",
                 service.group._get_running_service_container_ids())
             print_info("Default docker container name",
                 info["Default docker container name"])
