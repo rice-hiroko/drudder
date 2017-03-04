@@ -4491,6 +4491,8 @@ def bulk_build_services(services, reason, force_complete_rebuild=False,
                         stderr=subprocess.STDOUT)
                 else:
                     output = SubprocessHelper.check_output_with_isolated_pty([
+                        SystemInfo.docker_compose_path(), "pull"])
+                    output = SubprocessHelper.check_output_with_isolated_pty([
                         SystemInfo.docker_compose_path(),
                         "build",
                         "--no-cache", "--pull", self.service.name],
