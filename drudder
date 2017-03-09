@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-Copyright (c) 2015-2016  Jonas Thiem et al.
+Copyright (c) 2015-2017  Jonas Thiem et al.
 
 This software is provided 'as-is', without any express or implied
 warranty. In no event will the authors be held liable for any damages
@@ -2775,8 +2775,11 @@ class ServiceGroup(object):
         try:
             env = os.environ.copy()
             env["COLUMNS"] = "200"
-            output = execution_cache.check_output_with_isolated_pty([
-                SystemInfo.docker_path(), "ps"],
+            cmd = [SystemInfo.docker_path(), "ps"]
+            if only_running:
+                cmd += ["-a"]
+            output = execution_cache.check_output_with_isolated_pty(
+                cmd,
                 cwd=os.path.expanduser("~"),
 		stderr=subprocess.STDOUT,
                 timeout=10, env=env).\
@@ -2809,8 +2812,26 @@ class ServiceGroup(object):
 
             # Extract containers:
             output_line = output_line.strip()
-            if len(output_line) > 0 and (output_line.find(" Up") > 0 or \
-                    not only_running):
+            def extract_status(line):
+                # Skip past CONTAINER ID and IMAGE:
+                line = line.partition("  ")[2].strip()
+                line = line.partition("  ")[2].strip()
+
+                # Skip past COMMAND:
+                line = line.partition("\"  ")[2].strip()
+
+                # Skip past "CREATED":
+                line = line.partition("  ")[2].strip()
+
+                # Throw away everything after STATUS:
+                return line.partition("  ")[0].strip()
+                
+            status = extract_status(output_line)
+            if len(output_line) > 0 and len(status) > 0 and (
+                    (status.find("exited") < 0 and
+                    status.find("dead") < 0 and
+                    status.find("removing") < 0)
+                    or not only_running):
                 container_id = output_line.partition(" ")[0]
                 if translate_to_names:
                     container_id = self._docker_container_id_to_name(
@@ -2835,6 +2856,8 @@ class ServiceGroup(object):
             def_base = def_base[:-len("1")]
         elif not def_base.endswith("_"):
             def_base += "_"
+        if cid == def_base[:-1]:
+            return True
         if cid.startswith(def_base):
             remains = cid[len(def_base):]
             if remains.startswith("run_"):
@@ -3140,7 +3163,10 @@ class LaunchThreaded(threading.Thread):
                 if not self.service.running:
                     self.print_mutex.acquire()
                     print_msg("failed to launch. (nothing running after " +\
-                        "1 second)",\
+                        "1 second - docker ps listing related to container: " +
+                        str(self.service.group.\
+                            _get_running_service_container_names( +
+                            self.service)) + ")",\
                         service=self.service.name,
                         group=self.service.group.name, color="red")
                     self.print_mutex.release()
