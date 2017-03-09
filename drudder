@@ -1848,8 +1848,9 @@ def print_msg(text, group=None,
             if container != None:
                 initial_length += len("/" + container)
     initial_length += len("] ")
-    later_length = int(max(initial_length / 2,
-        min(10, initial_length)))
+    #later_length = int(max(initial_length / 2,
+    #    min(10, initial_length)))
+    later_length = 4
 
     text_color = ""
     if ENABLE_COLORS:
@@ -3009,7 +3010,17 @@ class ServiceGroup(object):
         results = set()
 
         # Assemble results:
-        yml = DockerComposeYml(self.group_dir)
+        try:
+            yml = DockerComposeYml(self.group_dir)
+        except (yaml.constructor.ConstructorError,
+                yaml.YAMLError) as e:
+            print_msg("invalid group encountered, " +
+                "couldn't parse " +
+                "docker-compose.yml at " +
+                os.path.join(self.group_dir,
+                    "docker-compose.yml"),
+                color="red", group=self.group_dir)
+            return []
         for service_name in yml.services:
             results.add(Service(service_name,
                 self.name, self.group_dir))
