@@ -2830,7 +2830,8 @@ class ServiceGroup(object):
             if len(output_line) > 0 and len(status) > 0 and (
                     (status.find("exited") < 0 and
                     status.find("dead") < 0 and
-                    status.find("removing") < 0)
+                    status.find("removing") < 0 and
+                    status.find("removal") < 0)
                     or not only_running):
                 container_id = output_line.partition(" ")[0]
                 if translate_to_names:
