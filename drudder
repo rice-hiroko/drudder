@@ -2826,7 +2826,7 @@ class ServiceGroup(object):
                 # Throw away everything after STATUS:
                 return line.partition("  ")[0].strip()
                 
-            status = extract_status(output_line)
+            status = extract_status(output_line).lower()
             if len(output_line) > 0 and len(status) > 0 and (
                     (status.find("exited") < 0 and
                     status.find("dead") < 0 and
