@@ -2319,11 +2319,13 @@ class Service(object):
                 force_container_recreation:
             if len(potentially_lost_volumes) > 0:
                 print_mutex.acquire()
-                print_msg("some volumes might be potentially dangling, " +\
-                    "but container recreation was forced by user",
-                    service=self.service.name, container=self.name,
-                    color="yellow")
-                print_mutex.release()
+                try:
+                    print_msg("some volumes might be potentially dangling, " +\
+                        "but container recreation was forced by user",
+                        service=self.service.name, container=self.name,
+                        color="yellow")
+                finally:
+                    print_mutex.release()
             try:
                 output = SubprocessHelper.check_output_with_isolated_pty([
                     SystemInfo.docker_compose_path(),
@@ -2337,8 +2339,10 @@ class Service(object):
             except AttributeError:
                 pass
             #print_mutex.acquire()
-            #print(clear_text(output))
-            #print_mutex.release()
+            #try:
+            #    print(clear_text(output))
+            #finally:
+            #    print_mutex.release()
         else:
             print_mutex.acquire()
             for vol in potentially_lost_volumes:
@@ -2366,9 +2370,11 @@ class Service(object):
         except AttributeError:
             pass
         print_mutex.acquire()
-        repair_terminal()
-        print(clear_text(output), flush=True)
-        print_mutex.release()
+        try:
+            repair_terminal()
+            print(clear_text(output), flush=True)
+        finally:
+            print_mutex.release()
 
     def __eq__(self, other):
         if not hasattr(other, "name") or not hasattr(other,
@@ -3115,9 +3121,11 @@ class LaunchThreaded(threading.Thread):
                         owner = getpwnam(owner).pw_uid
                     except KeyError:
                         self.print_mutex.acquire()
-                        print_msg("invalid user specified for permissions: "+\
-                            "can't get uid for user: " + owner, color="red")
-                        self.print_mutex.release()
+                        try:
+                            print_msg("invalid user specified for permissions: "+\
+                                "can't get uid for user: " + owner, color="red")
+                        finally:
+                            self.print_mutex.release()
                         raise RuntimeError("invalid user")
                 for root, dirs, files in os.walk(os.path.join(self.path, \
                         "livedata")):
@@ -3137,13 +3145,16 @@ class LaunchThreaded(threading.Thread):
                             if dependency.service in \
                                     self.failed_launch_tracker:
                                 self.print_mutex.acquire()
-                                print_msg("launch aborted due to failed " +\
-                                    "dependency launch: " +\
-                                    str(dependency),
-                                    service=self.service.name,
-                                    group=self.service.group.name,
-                                    color="red")
-                                self.print_mutex.release()
+                                try:
+                                    print_msg(
+                                        "launch aborted due to failed " +
+                                        "dependency launch: " +
+                                        str(dependency),
+                                        service=self.service.name,
+                                        group=self.service.group.name,
+                                        color="red")
+                                finally:
+                                    self.print_mutex.release()
                                 self.failed_launch_tracker.add(
                                     self.service)
                                 self.do_on_failure()
@@ -3152,9 +3163,11 @@ class LaunchThreaded(threading.Thread):
 
             # Launch the service:
             self.print_mutex.acquire()
-            print_msg("launching...", service=self.service.name,
-                group=self.service.group.name, color="blue")
-            self.print_mutex.release()
+            try:
+                print_msg("launching...", service=self.service.name,
+                    group=self.service.group.name, color="blue")
+            finally:
+                self.print_mutex.release()
             try:
                 self.service.start(
                     force_container_recreation=\
@@ -3163,41 +3176,50 @@ class LaunchThreaded(threading.Thread):
                 time.sleep(1)
                 if not self.service.running:
                     self.print_mutex.acquire()
-                    print_msg("failed to launch. (nothing running after " +\
-                        "1 second - docker ps listing related to container: " +
-                        str(self.service.group.\
-                            _get_running_service_container_names( +
-                            self.service)) + ")",\
-                        service=self.service.name,
-                        group=self.service.group.name, color="red")
-                    self.print_mutex.release()
+                    try:
+                        print_msg("failed to launch. (nothing running after " +\
+                            "1 second - docker ps listing related to container: " +
+                            str(self.service.group.\
+                                _get_running_service_container_names( +
+                                self.service)) + ")",\
+                            service=self.service.name,
+                            group=self.service.group.name, color="red")
+                    finally:
+                        self.print_mutex.release()
                     if self.failed_launch_tracker != None:
                         self.failed_launch_tracker.add(self.service)
                     self.do_on_failure()
                     return
                 self.print_mutex.acquire()
-                print_msg("now running.",
-                    service=self.service.name,
-                    group=self.service.group.name, color="green")
-                self.print_mutex.release()
+                try:
+                    print_msg("now running.",
+                        service=self.service.name,
+                        group=self.service.group.name, color="green")
+                finally:
+                    self.print_mutex.release()
                 self.do_on_success()
             except subprocess.CalledProcessError:
                 self.print_mutex.acquire()
-                print_msg("failed to launch. (error exit code)",\
-                    service=self.service.name,
-                    group=self.service.group.name,
-                    color="red")
-                self.print_mutex.release()
+                try:
+                    print_msg(
+                        "failed to launch. (error exit code)",\
+                        service=self.service.name,
+                        group=self.service.group.name,
+                        color="red")
+                finally:
+                    self.print_mutex.release()
                 if self.failed_launch_tracker != None:
                     self.failed_launch_tracker.add(self.service)
                 self.do_on_failure()
             except Exception as e:
                 self.print_mutex.acquire()
-                print_msg("failed to launch. (unknown error)",\
-                    service=self.service.name,
-                    group=self.service.group.name,
-                    color="red")
-                self.print_mutex.release()
+                try:
+                    print_msg("failed to launch. (unknown error)",\
+                        service=self.service.name,
+                        group=self.service.group.name,
+                        color="red")
+                finally:
+                    self.print_mutex.release()
                 if self.failed_launch_tracker != None:
                     self.failed_launch_tracker.add(self.service)
                 self.do_on_failure()
