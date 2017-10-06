@@ -3177,10 +3177,12 @@ class LaunchThreaded(threading.Thread):
                 if not self.service.running:
                     self.print_mutex.acquire()
                     try:
-                        print_msg("failed to launch. (nothing running after " +\
-                            "1 second - docker ps listing related to container: " +
+                        print_msg("failed to launch. (nothing running " +\
+                            "after " +\
+                            "1 second - docker ps listing related " +\
+                            "to container: " +
                             str(self.service.group.\
-                                _get_running_service_container_names( +
+                                _get_running_service_container_names(
                                 self.service)) + ")",\
                             service=self.service.name,
                             group=self.service.group.name, color="red")
