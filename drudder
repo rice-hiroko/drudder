@@ -894,11 +894,12 @@ class Installer(object):
                 "privileges.", file=sys.stderr)
             sys.exit(1)
 
-        # Set executable flag (+x):
+        # Set executable flag (+x) and make world readable:
         import stat
         os.chmod(docker_tool_target,
             os.stat(docker_tool_target).st_mode
-            | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+            | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH | \
+            stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
 
     @staticmethod
     def check_and_install_missing():
@@ -1168,44 +1169,46 @@ class Installer(object):
                 print("Please report this problem at " + BUG_URL,
                     file=sys.stderr)
                 sys.exit(1)
-            try:
-                print("drudder: info: [Installer/docker] " +\
-                    "Importing docker-engine repository key...")
-                subprocess.check_output(["apt-key", "adv", "--keyserver",
-                    "hkp://p80.pool.sks-keyservers.net:80", "--recv-keys",
-                    "58118E89F3A912897C070ADBF76221572C52609D"])
-            except subprocess.CalledProcessError:
-                print("drudder: error: distribution key import failed.",
-                    file=sys.stderr) 
-                print("Please re-run this with sudo / administrator " +\
-                    "privileges, and check your internet connectivity.",
-                    file=sys.stderr)
-                print("If you think this is a bug, please file a ticket "+\
-                    "at " + str(BUG_URL), file=sys.stderr)
-                sys.exit(1)
-            print("drudder: info: [Installer/docker] Adding " +\
-                "docker-engine repository to apt sources...")
-            sources_lst_file = os.path.join("/etc", "apt", "sources.list.d",
-                "docker.list")
-            if os.path.exists(sources_lst_file):
+            # On Debian, import official docker package:
+            if distribution == "debian":
                 try:
-                    os.remove(sources_lst_file)
+                    print("drudder: info: [Installer/docker] " +\
+                        "Importing docker-engine repository key...")
+                    subprocess.check_output(["apt-key", "adv", "--keyserver",
+                        "hkp://p80.pool.sks-keyservers.net:80", "--recv-keys",
+                        "9DC858229FC7DD38854AE2D88D81803C0EBFCD88"])
+                except subprocess.CalledProcessError:
+                    print("drudder: error: distribution key import failed.",
+                        file=sys.stderr) 
+                    print("Please re-run this with sudo / administrator " +\
+                        "privileges, and check your internet connectivity.",
+                        file=sys.stderr)
+                    print("If you think this is a bug, please file a ticket "+\
+                        "at " + str(BUG_URL), file=sys.stderr)
+                    sys.exit(1)
+                print("drudder: info: [Installer/docker] Adding " +\
+                    "docker-engine repository to apt sources...")
+                sources_lst_file = os.path.join("/etc", "apt", "sources.list.d",
+                    "docker.list")
+                if os.path.exists(sources_lst_file):
+                    try:
+                        os.remove(sources_lst_file)
+                    except OSError:
+                        print("drudder: error: failed to remove file: " +\
+                            str(sources_lst_file))
+                        print("Please re-run this with sudo / administrator " +\
+                            "privileges", file=sys.stderr)
+                        sys.exit(1)
+                try:
+                    with open(sources_lst_file, "w") as f:
+                        f.write("deb https://apt.dockerproject.org/repo " +\
+                            distribution + "-" + distribution_codename + " main")
                 except OSError:
-                    print("drudder: error: failed to remove file: " +\
+                    print("drudder: error: failed to create file: " +\
                         str(sources_lst_file))
                     print("Please re-run this with sudo / administrator " +\
                         "privileges", file=sys.stderr)
                     sys.exit(1)
-            try:
-                with open(sources_lst_file, "w") as f:
-                    f.write("deb https://apt.dockerproject.org/repo " +\
-                        distribution + "-" + distribution_codename + " main")
-            except OSError:
-                print("drudder: error: failed to create file: " +\
-                    str(sources_lst_file))
-                print("Please re-run this with sudo / administrator " +\
-                    "privileges", file=sys.stderr)
-                sys.exit(1)
 
             # Refresh package index with new repository added:
             while True:
@@ -1220,7 +1223,7 @@ class Installer(object):
                             b"/usr/lib/apt/methods/https could not be found"
                             ) >= 0:
                         print("[Installer/docker] Running: " +\
-                            "apt-get install -y docker-engine")
+                            "apt-get install -y apt-transport-https")
                         SubprocessHelper.check_output_with_stdout_copy(
                             ["apt-get", "install", "-y",
                             "apt-transport-https"],
@@ -1237,10 +1240,13 @@ class Installer(object):
                         b"Media change: please insert the disc") >= 0:
                     raise RuntimeError("aborting - missing install media")
 
-            # Install docker-engine package:
+            # Install docker package:
+            package_name = "docker-engine"
+            if distribution == "debian":
+                package_name = "docker-ce"
             try:
                 print("drudder: info: [Installer/docker] running: " +\
-                    "apt-get install -y docker-engine")
+                    "apt-get install -y " + str(docker_engine))
                 media_error["temp_output"] = b""
                 SubprocessHelper.check_output_with_stdout_copy(
                     ["apt-get", "install", "-y", "docker-engine"],
@@ -1265,43 +1271,18 @@ class Installer(object):
             return
         # Fedora docker install:
         elif distribution == "fedora":
-            sources_lst_file = os.path.join("/etc", "yum.repos.d",
-                "docker.repo")
-            print("drudder: info: [Installer/docker] writing " +\
-                "repository info to " +\
-                str(sources_lst_file))
-            if os.path.exists(sources_lst_file):
-                try:
-                    os.remove(sources_lst_file)
-                except OSError:
-                    print("drudder: error: failed to remove file: " +\
-                        str(sources_lst_file))
-                    print("Please re-run this with sudo / administrator " +\
-                        "privileges", file=sys.stderr)
-                    sys.exit(1)
-            try:
-                with open(sources_lst_file, "w") as f:
-                    f.write(textwrap.dedent("""\
-                    [dockerrepo]
-                    name=Docker Repository
-                    baseurl=https://yum.dockerproject.org/repo/main/fedora/$releasever/
-                    enabled=1
-                    gpgcheck=1
-                    gpgkey=https://yum.dockerproject.org/gpg
-                    """))
-            except OSError:
-                print("drudder: error: failed to create file: " +\
-                    str(sources_lst_file))
-                print("Please re-run this with sudo / administrator " +\
-                    "privileges", file=sys.stderr)
-                sys.exit(1)
+            print("drudder: info: [Installer/docker] " +\
+                "Running dnf config-manager --add-repo...")
+            subprocess.check_output(["dnf", "config-manager",
+                "--add-repo",
+                "https://download.docker.com/linux/fedora/docker-ce.repo"])
 
-            # Install docker-engine package:
+            # Install docker-ce package:
             print("drudder: info: [Installer/docker] Running: " +\
-                "dnf install -y docker-engine")
+                "dnf install -y docker-ce")
             SubprocessHelper.check_output_with_stdout_copy([
                 "dnf", "install", \
-                "-y", "docker-engine"], stderr=subprocess.STDOUT)
+                "-y", "docker-ce"], stderr=subprocess.STDOUT)
             return
         # Others:
         else:
