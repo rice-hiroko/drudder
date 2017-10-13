@@ -1246,10 +1246,10 @@ class Installer(object):
                 package_name = "docker-ce"
             try:
                 print("drudder: info: [Installer/docker] running: " +\
-                    "apt-get install -y " + str(docker_engine))
+                    "apt-get install -y " + str(package_name))
                 media_error["temp_output"] = b""
                 SubprocessHelper.check_output_with_stdout_copy(
-                    ["apt-get", "install", "-y", "docker-engine"],
+                    ["apt-get", "install", "-y", package_name],
                     stderr=subprocess.STDOUT, pty=True,
                     write_function=media_change_error_detection)
             except RuntimeError:
