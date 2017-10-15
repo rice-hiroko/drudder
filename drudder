@@ -1241,7 +1241,7 @@ class Installer(object):
                     raise RuntimeError("aborting - missing install media")
 
             # Install docker package:
-            package_name = "docker-engine"
+            package_name = "docker.io"
             if distribution == "debian":
                 package_name = "docker-ce"
             try:
