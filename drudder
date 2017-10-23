@@ -1277,12 +1277,12 @@ class Installer(object):
                 "--add-repo",
                 "https://download.docker.com/linux/fedora/docker-ce.repo"])
 
-            # Install docker-ce package:
+            # Install docker package:
             print("drudder: info: [Installer/docker] Running: " +\
-                "dnf install -y docker-ce")
+                "dnf install -y docker")
             SubprocessHelper.check_output_with_stdout_copy([
                 "dnf", "install", \
-                "-y", "docker-ce"], stderr=subprocess.STDOUT)
+                "-y", "docker"], stderr=subprocess.STDOUT)
             return
         # Others:
         else:
